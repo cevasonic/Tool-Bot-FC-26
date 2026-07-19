@@ -1,0 +1,32 @@
+{
+  "setup_mode": false,
+  "target_sbcs": [
+    {
+      "name": "Daily Common Gold Upgrade",
+      "max_repeats": 7
+    },
+    {
+      "name": "Daily Bronze Upgrade",
+      "max_repeats": 7
+    }
+  ],
+  "target_packs": [
+    "11x Gold Players Pack",
+    "5x 80+ Rare Gold Players Pack"
+  ],
+  "delays": {
+    "before_build_min": 1.5,
+    "before_build_max": 3.0,
+    "after_build_min": 2.5,
+    "after_build_max": 4.5,
+    "after_submit_min": 1.5,
+    "after_submit_max": 3.0,
+    "batch_size": 10,
+    "batch_rest_seconds": 60
+  },
+  "telegram": {
+    "enabled": false,
+    "bot_token": "YOUR_TELEGRAM_BOT_TOKEN",
+    "chat_id": "YOUR_TELEGRAM_CHAT_ID"
+  }
+}

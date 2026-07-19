@@ -1,0 +1,23 @@
+# Python cache
+**/__pycache__/
+**/*.pyc
+**/*.pyo
+**/*.pyd
+
+# Chrome profile containing session cookies and credentials (CRITICAL)
+.agents/skills/fc_sbc_bot/chrome_profile/
+
+# Personal configuration containing Telegram token (CRITICAL)
+.agents/skills/fc_sbc_bot/config.json
+
+# Debug screenshots
+**/*.png
+
+# macOS system files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
