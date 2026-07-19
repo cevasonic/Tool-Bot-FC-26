@@ -5,7 +5,13 @@ import json
 import random
 import urllib.parse
 import requests
+import re
 from playwright.sync_api import sync_playwright
+
+if hasattr(sys.stdout, 'reconfigure'):
+    sys.stdout.reconfigure(encoding='utf-8')
+if hasattr(sys.stderr, 'reconfigure'):
+    sys.stderr.reconfigure(encoding='utf-8')
 
 def global_exception_handler(exctype, value, tb):
     if "closed" in str(value).lower() or "target" in str(value).lower():
@@ -18,6 +24,23 @@ sys.excepthook = global_exception_handler
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 PALETOOLS_PATH = os.path.join(BASE_DIR, "paletools.txt")
+
+class DualLogger(object):
+    def __init__(self, filepath):
+        self.terminal = sys.stdout
+        self.log = open(filepath, "a", encoding="utf-8")
+
+    def write(self, message):
+        self.terminal.write(message)
+        self.log.write(message)
+        self.log.flush()
+
+    def flush(self):
+        self.terminal.flush()
+        self.log.flush()
+
+sys.stdout = DualLogger(os.path.join(BASE_DIR, "run_interactive.log"))
+sys.stderr = sys.stdout
 
 def sleep_human_like(min_sec, max_sec):
     delay = random.uniform(min_sec, max_sec)
@@ -96,14 +119,42 @@ def wait_for_click_shield(page, timeout=20000):
         pass
     time.sleep(1.0)
 
+def wait_for_unassigned_screen(page, timeout_ms=15000):
+    print("[RPA] Đang chờ màn hình vật phẩm unassigned xuất hiện...")
+    start_time = time.time()
+    selectors = [
+        "button:has-text('SBC Storage')",
+        "button:has-text('Store All Items')",
+        "button:has-text('Store All')",
+        "button:has-text('Send Duplicates to SBC Storage')",
+        ".ut-unassigned-view",
+        ".unassigned-view",
+        "button:has-text('Quick Sell')",
+        ".layout-split"
+    ]
+    while time.time() - start_time < (timeout_ms / 1000.0):
+        for sel in selectors:
+            try:
+                if page.locator(sel).first.is_visible():
+                    print(f"[OK] Đã phát hiện màn hình unassigned (phần tử: {sel})")
+                    return True
+            except Exception:
+                pass
+        time.sleep(0.5)
+    print("[WARNING] Quá thời gian chờ màn hình unassigned xuất hiện. Tiếp tục thực hiện các thao tác xử lý...")
+    return False
+
 def handle_unassigned_items(page, config):
     print("[RPA] Bắt đầu xử lý vật phẩm unassigned sau khi mở pack...")
-    time.sleep(3.0)  # Đợi màn hình mở pack hoàn tất hiển thị các cầu thủ
+    
+    # Chờ màn hình unassigned hiển thị đầy đủ
+    wait_for_unassigned_screen(page, timeout_ms=15000)
+    time.sleep(1.5)
     
     # 1. Thử gửi vật phẩm không trùng lặp vào Club bằng phím Space (Shortcut của PaleTools)
     print("[RPA] Thử gửi vật phẩm không trùng vào Club (nhấn Space)...")
     page.keyboard.press("Space")
-    time.sleep(2.0)
+    time.sleep(1.5)
     
     # 2. Xử lý các cầu thủ trùng lặp (Duplicates) gửi vào SBC Storage
     storage_buttons = [
@@ -136,7 +187,7 @@ def handle_unassigned_items(page, config):
                     btn_text = loc.text_content().strip() if loc.text_content() else ""
                     print(f"[RPA] Tìm thấy nút gửi duplicate: '{btn_text}'. Đang click...")
                     loc.click()
-                    time.sleep(2.0)
+                    time.sleep(1.5)
                     
                     # Kiểm tra xem có hộp thoại xác nhận (dialog) xuất hiện không
                     try:
@@ -152,7 +203,7 @@ def handle_unassigned_items(page, config):
                             if c_btn.is_visible():
                                 print(f"[RPA] Tìm thấy hộp thoại xác nhận, click '{c_btn.text_content().strip()}'...")
                                 c_btn.click()
-                                time.sleep(1.5)
+                                time.sleep(1.0)
                                 break
                     except Exception:
                         pass
@@ -169,21 +220,38 @@ def handle_unassigned_items(page, config):
                     btn_text = loc.text_content().strip() if loc.text_content() else ""
                     print(f"[RPA] Tìm thấy nút Store All: '{btn_text}'. Đang click...")
                     loc.click()
-                    time.sleep(2.0)
+                    time.sleep(1.5)
                     break
         except Exception:
             pass
             
     # Cuối cùng, thử nhấn Space một lần nữa để dọn dẹp nốt nếu còn sót
     page.keyboard.press("Space")
-    time.sleep(1.5)
-    print("[RPA] Đã hoàn thành dọn dẹp vật phẩm unassigned.")
+    time.sleep(1.0)
     
-    # Chủ động quay lại My Packs bằng phím tắt "1" của PaleTools
+    # VÒNG LẶP CHỜ: Đợi cho đến khi không còn nút thao tác nào hiển thị trên UI (xác nhận dọn dẹp sạch unassigned)
+    print("[RPA] Đang chờ xác nhận việc dọn dẹp vật phẩm unassigned hoàn tất...")
+    cleanup_timeout = 8.0
+    start_cleanup = time.time()
+    while time.time() - start_cleanup < cleanup_timeout:
+        any_visible = False
+        for selector in storage_buttons + club_buttons:
+            try:
+                if page.locator(selector).first.is_visible():
+                    any_visible = True
+                    break
+            except Exception:
+                pass
+        if not any_visible:
+            print("[OK] Đã hoàn thành dọn dẹp vật phẩm unassigned thành công!")
+            break
+        time.sleep(0.5)
+    
+    # 主動 quay lại My Packs bằng phím tắt "1" của PaleTools
     try:
         print("[RPA] Nhấn phím '1' để quay lại My Packs (Shortcut PaleTools)...")
         page.keyboard.press("1")
-        time.sleep(2.0)
+        time.sleep(2.5) # Tăng nhẹ thời gian chờ để Web App phản hồi
         
         # Nếu nhấn phím '1' mà vẫn chưa về My Packs, thử click tab Store để fallback
         if not is_in_my_packs(page):
@@ -191,7 +259,7 @@ def handle_unassigned_items(page, config):
             store_tab = page.locator(".ut-tab-bar-item.icon-store")
             if store_tab.count() > 0:
                 store_tab.click()
-                time.sleep(2.5)
+                time.sleep(3.0) # Tăng nhẹ delay để trang Store tải xong
     except Exception as e:
         print(f"[WARNING] Lỗi khi quay lại Store/My Packs: {e}")
 
@@ -248,6 +316,140 @@ def ensure_paletools_injected(page, paletools_js):
     except Exception as e:
         print(f"[WARNING] Không thể kiểm tra hoặc inject lại PaleTools: {e}")
 
+def ensure_bot_overlay(page):
+    try:
+        has_panel = page.evaluate("!!document.getElementById('bot-overlay-panel')")
+        if not has_panel:
+            page.evaluate("""() => {
+                let div = document.createElement("div");
+                div.id = "bot-overlay-panel";
+                div.style.position = "fixed";
+                div.style.top = "10px";
+                div.style.left = "50%";
+                div.style.transform = "translateX(-50%)";
+                div.style.zIndex = "999999";
+                div.style.background = "rgba(20, 20, 20, 0.95)";
+                div.style.border = "2px solid #00ff88";
+                div.style.borderRadius = "8px";
+                div.style.padding = "8px 20px";
+                div.style.color = "#fff";
+                div.style.fontFamily = "system-ui, -apple-system, sans-serif";
+                div.style.display = "flex";
+                div.style.alignItems = "center";
+                div.style.gap = "15px";
+                div.style.boxShadow = "0 4px 15px rgba(0,0,0,0.5)";
+                div.style.userSelect = "none";
+                
+                let title = document.createElement("span");
+                title.style.fontWeight = "bold";
+                title.style.color = "#00ff88";
+                title.innerText = "FC SBC BOT:";
+                
+                let statusText = document.createElement("span");
+                statusText.id = "bot-status-text";
+                statusText.innerText = "Đang chạy...";
+                statusText.style.color = "#00ff88";
+                
+                let btn = document.createElement("button");
+                btn.id = "bot-pause-btn";
+                btn.setAttribute("data-status", "running");
+                btn.style.background = "#ff3366";
+                btn.style.border = "none";
+                btn.style.borderRadius = "4px";
+                btn.style.color = "#fff";
+                btn.style.padding = "5px 12px";
+                btn.style.cursor = "pointer";
+                btn.style.fontWeight = "bold";
+                btn.style.transition = "0.2s";
+                btn.innerText = "TẠM DỪNG (Pause)";
+                
+                btn.addEventListener("click", () => {
+                    if (btn.getAttribute("data-status") === "running") {
+                        btn.setAttribute("data-status", "paused");
+                        btn.innerText = "TIẾP TỤC (Resume)";
+                        btn.style.background = "#00ff88";
+                        btn.style.color = "#000";
+                        statusText.innerText = "ĐÃ TẠM DỪNG";
+                        statusText.style.color = "#ff3366";
+                    } else {
+                        btn.setAttribute("data-status", "running");
+                        btn.innerText = "TẠM DỪNG (Pause)";
+                        btn.style.background = "#ff3366";
+                        btn.style.color = "#fff";
+                        statusText.innerText = "Đang chạy...";
+                        statusText.style.color = "#00ff88";
+                    }
+                });
+                
+                div.appendChild(title);
+                div.appendChild(statusText);
+                div.appendChild(btn);
+                document.body.appendChild(div);
+            }""")
+    except Exception as e:
+        print(f"[WARNING] Không thể tạo bảng điều khiển Overlay: {e}")
+
+def check_pause(page):
+    try:
+        ensure_bot_overlay(page)
+        import msvcrt
+        printed = False
+        while True:
+            if msvcrt.kbhit():
+                ch = msvcrt.getch()
+                if ch in [b'p', b'P', b' ']:
+                    page.evaluate("""() => {
+                        let btn = document.getElementById('bot-pause-btn');
+                        let statusText = document.getElementById('bot-status-text');
+                        if (btn) {
+                            btn.setAttribute('data-status', 'paused');
+                            btn.innerText = 'TIẾP TỤC (Resume)';
+                            btn.style.background = '#00ff88';
+                            btn.style.color = '#000';
+                            statusText.innerText = 'ĐÃ TẠM DỪNG';
+                            statusText.style.color = '#ff3366';
+                        }
+                    }""")
+            
+            is_paused = page.evaluate("""() => {
+                let btn = document.getElementById('bot-pause-btn');
+                return btn && btn.getAttribute('data-status') === 'paused';
+            }""")
+            
+            if not is_paused:
+                break
+                
+            if not printed:
+                print("\n" + "="*60)
+                print("[PAUSE] BOT ĐÃ ĐƯỢC TẠM DỪNG!")
+                print("-> Hãy click nút 'TIẾP TỤC (Resume)' trên Chrome hoặc nhấn 'p'/Space ở Console này để chạy tiếp.")
+                print("="*60 + "\n")
+                printed = True
+                
+            time.sleep(0.5)
+            
+        if printed:
+            print("[RESUME] Bot đang TIẾP TỤC chạy...\n")
+            
+        if msvcrt.kbhit():
+            ch = msvcrt.getch()
+            if ch in [b'p', b'P', b' ']:
+                page.evaluate("""() => {
+                    let btn = document.getElementById('bot-pause-btn');
+                    let statusText = document.getElementById('bot-status-text');
+                    if (btn) {
+                        btn.setAttribute('data-status', 'paused');
+                        btn.innerText = 'TIẾP TỤC (Resume)';
+                        btn.style.background = '#00ff88';
+                        btn.style.color = '#000';
+                        statusText.innerText = 'ĐÃ TẠM DỪNG';
+                        statusText.style.color = '#ff3366';
+                    }
+                }""")
+                check_pause(page)
+    except Exception:
+        pass
+
 def get_pack_info(tile):
     pack_name = None
     for sub_sel in [".name", ".title", "h1", "h2", "h3"]:
@@ -282,20 +484,6 @@ def get_pack_info(tile):
         except Exception:
             pass
             
-    # Nếu không tìm thấy class cụ thể, thử parse từ text_content của toàn bộ tile
-    try:
-        tile_text = tile.text_content()
-        if tile_text:
-            # Loại bỏ tên pack ra khỏi text của tile
-            remaining_text = tile_text.replace(pack_name, "").strip()
-            # Tìm tất cả các số độc lập trong remaining_text
-            import re
-            numbers = re.findall(r'\b\d+\b', remaining_text)
-            if numbers:
-                quantity = int(numbers[0])
-    except Exception:
-        pass
-        
     return pack_name, quantity
 
 def find_best_match(target_name, available_names):
@@ -318,6 +506,86 @@ def find_best_match(target_name, available_names):
         if target_name.lower() in name.lower() or name.lower() in target_name.lower():
             return name
             
+    return None
+
+def find_sbc_tile(page, sbc_name):
+    import re
+    try:
+        # Tìm phần tử text chứa tên SBC (dùng regex để không phân biệt chữ hoa chữ thường)
+        name_locator = page.get_by_text(re.compile(re.escape(sbc_name.strip()), re.IGNORECASE))
+        count = name_locator.count()
+        for i in range(count):
+            loc = name_locator.nth(i)
+            if loc.is_visible():
+                # Thử tìm các thẻ cha phổ biến của EA Web App
+                for ancestor_xpath in [
+                    "./ancestor::*[contains(@class, 'ut-sbc-tile-view')]",
+                    "./ancestor::*[contains(@class, 'sbc-item-view')]",
+                    "./ancestor::*[contains(@class, 'tile')]",
+                    "./ancestor::*[contains(@class, 'sbcItem')]",
+                    "./ancestor::*[contains(@class, 'sbc-tile')]",
+                    "./ancestor::*[contains(@class, 'SbcItemView')]",
+                    "./ancestor::*[contains(@class, 'ItemView')]"
+                ]:
+                    ancestor = loc.locator(f"xpath={ancestor_xpath}").first
+                    if ancestor.count() > 0 and ancestor.is_visible():
+                        return ancestor
+                # Nếu không tìm thấy ancestor cụ thể, thử tìm ancestor tổng quát gần nhất
+                general_ancestor = loc.locator("xpath=./ancestor::*[contains(@class, 'tile') or contains(@class, 'item') or contains(@class, 'sbc')][1]").first
+                if general_ancestor.count() > 0 and general_ancestor.is_visible():
+                    return general_ancestor
+    except Exception as e:
+        print(f"[WARNING] Lỗi trong find_sbc_tile: {e}")
+    return None
+
+def get_sbc_repeats(tile_locator):
+    import re
+    try:
+        # 1. ƯU TIÊN tìm phần tử con chứa thông tin tiến trình hoàn thành (ví dụ: 1/1 SBCs)
+        progress_el = tile_locator.locator(".ut-sbc-set-tile-view--progress-block, .progress-block, [class*='progress']").first
+        if progress_el.count() > 0 and progress_el.is_visible():
+            prog_text = progress_el.text_content()
+            match_prog = re.search(r'(?:[Cc]ompleted|[Hh]oàn\s*thành|[Ll]ượt|[Ll]ần|[Rr]epeat[s]?|SBC[s]?)\s*[^0-9]*(\d+)\s*/\s*(\d+)', prog_text, re.IGNORECASE)
+            if match_prog:
+                done = int(match_prog.group(1))
+                total = int(match_prog.group(2))
+                if total > done:
+                    return total - done
+                return 0
+
+        # 2. Tìm phần tử con chứa thông tin repeatable tĩnh (ví dụ: Repeatable: 0)
+        repeat_el = tile_locator.locator(".ut-squad-building-set-status-label-view.repeat, .repeat, [class*='repeat']").first
+        if repeat_el.count() > 0 and repeat_el.is_visible():
+            rep_text = repeat_el.text_content()
+            match_rep = re.search(r'(?:[Rr]epeatable|[Rr]epeat|[Ll]ượt\s*làm\s*lại|[Ll]ặp\s*lại)\s*:\s*(\d+)', rep_text, re.IGNORECASE)
+            if match_rep:
+                val = int(match_rep.group(1))
+                if val < 200:
+                    return val
+        
+        # 3. Fallback dùng toàn bộ text của tile nếu cấu trúc HTML thay đổi
+        tile_text = tile_locator.text_content()
+        if tile_text:
+            match_prog = re.search(r'(?:[Cc]ompleted|[Hh]oàn\s*thành|[Ll]ượt|[Ll]ần|[Rr]epeat[s]?)\s*[^0-9]*(\d+)\s*/\s*(\d+)', tile_text, re.IGNORECASE)
+            if match_prog:
+                done = int(match_prog.group(1))
+                total = int(match_prog.group(2))
+                if total > done:
+                    return total - done
+                return 0
+                
+            # Tránh khớp nhầm "Repeatable: 0" + "4 Hours" thành "04" bằng cách kiểm tra ranh giới từ hoặc loại trừ cooldown
+            match_rep = re.search(r'(?:[Rr]epeatable|[Rr]epeat|[Ll]ượt\s*làm\s*lại|[Ll]ặp\s*lại)\s*:\s*(\d+)\b', tile_text, re.IGNORECASE)
+            if match_rep:
+                val = int(match_rep.group(1))
+                if val < 200:
+                    return val
+
+            if any(w in tile_text.lower() for w in ["completed", "hoàn thành", "đã hoàn thành", "đã làm"]):
+                return 0
+            
+    except Exception as e:
+        print(f"[WARNING] Lỗi khi phân tích số lượt repeatable: {e}")
     return None
 
 def is_in_my_packs(page):
@@ -492,7 +760,7 @@ def run():
             print("[INFO] Opening Google Chrome with profile (Persistent Context)...")
             context = p.chromium.launch_persistent_context(
                 user_data_dir=user_data_dir,
-                headless=False,
+                headless=config.get("headless", False),
                 channel="chrome",
                 args=[
                     "--disable-blink-features=AutomationControlled",
@@ -507,7 +775,7 @@ def run():
             try:
                 context = p.chromium.launch_persistent_context(
                     user_data_dir=user_data_dir,
-                    headless=False,
+                    headless=config.get("headless", False),
                     args=[
                         "--disable-blink-features=AutomationControlled",
                         "--no-sandbox"
@@ -573,6 +841,7 @@ def run():
             sbc_count = 0
             consecutive_errors = 0
             while sbc_count < max_repeats:
+                check_pause(page)
                 resolved_sbc = False
                 check_captcha_or_errors(page, config)
                 print(f"[INFO] Starting SBC repeat {sbc_count + 1}/{max_repeats}...")
@@ -582,37 +851,131 @@ def run():
                     page.wait_for_selector(".ut-tab-bar-item.icon-sbc", timeout=15000)
                     page.click(".ut-tab-bar-item.icon-sbc")
                     sleep_human_like(1.5, 2.5)
-                    
-                    page.wait_for_selector("button:has-text('Favourites')", timeout=15000)
-                    page.click("button:has-text('Favourites')")
-                    sleep_human_like(3.0, 4.5)
                 except Exception as e:
-                    print(f"[ERROR] Could not navigate to SBC Favourites at repeat {sbc_count + 1}: {e}")
-                    alert_user_error(page, config, "Error navigating to SBC Favourites")
+                    print(f"[ERROR] Could not navigate to SBC menu: {e}")
+                    alert_user_error(page, config, "Error navigating to SBC menu")
                     consecutive_errors += 1
                     if consecutive_errors >= 3:
                         print("[ERROR] Quá nhiều lỗi điều hướng liên tiếp. Dừng bot để bảo vệ tài khoản.")
                         sys.exit(1)
                     continue
                 
-                # Định vị tile SBC thực sự hiển thị trên giao diện Favourites
-                import re
-                tile_locator = page.locator(".tile:visible, .sbc-tile:visible, .sbcItem:visible, .ut-sbc-tile-view:visible").filter(has_text=re.compile(f"^{re.escape(original_sbc_name)}$", re.IGNORECASE)).first
-                
+                # Tìm kiếm SBC trên giao diện
+                tile_locator = None
                 is_visible_on_ui = False
+                
+                # Bấm tab All để tìm kiếm diện rộng
                 try:
-                    if tile_locator.count() > 0 and tile_locator.is_visible():
+                    all_tab_btn = page.locator("button:has-text('All')").first
+                    if all_tab_btn.count() > 0:
+                        print("[INFO] Click tab 'All' để tìm kiếm diện rộng...")
+                        all_tab_btn.click()
+                        sleep_human_like(1.5, 2.5)
+                        
+                        # Cuộn xuống để tải thêm các SBC (lazy loading)
+                        print("[INFO] Đang cuộn xuống để tải thêm các SBC...")
+                        for scroll_attempt in range(5):
+                            page.evaluate("""
+                                window.scrollTo(0, document.body.scrollHeight);
+                                const containers = document.querySelectorAll('.ut-navigation-container-view, .ut-sbc-hub-view, .ut-sbc-grid-view');
+                                containers.forEach(c => {
+                                    c.scrollTop = c.scrollHeight;
+                                });
+                            """)
+                            sleep_human_like(0.6, 1.0)
+                except Exception as tab_err:
+                    print(f"[WARNING] Không thể bấm tab 'All' hoặc cuộn trang: {tab_err}")
+                
+                # Thử sử dụng hộp tìm kiếm (Search Input) trước để lọc nhanh
+                try:
+                    search_input = page.locator("input[placeholder='Search'], .ut-sbc-hub-view input.search, .search input").first
+                    if search_input.count() > 0 and search_input.is_visible():
+                        print(f"[INFO] Nhập '{original_sbc_name}' vào ô Tìm kiếm...")
+                        search_input.click()
+                        # Xóa text cũ nếu có
+                        page.keyboard.press("Control+A")
+                        page.keyboard.press("Backspace")
+                        # Nhập tên SBC
+                        search_input.type(original_sbc_name)
+                        sleep_human_like(2.0, 3.5)
+                except Exception as search_err:
+                    print(f"[WARNING] Lỗi khi sử dụng ô tìm kiếm: {search_err}")
+                
+                # Quét tìm tile SBC sau khi search bằng bộ lọc trực tiếp của Playwright
+                try:
+                    tile_locator = find_sbc_tile(page, original_sbc_name)
+                    if tile_locator is not None:
                         is_visible_on_ui = True
+                        print(f"[OK] Tìm thấy SBC '{original_sbc_name}' trên giao diện sau khi tìm kiếm!")
+                except Exception as scan_err:
+                    print(f"[WARNING] Lỗi khi quét tìm tile: {scan_err}")
+
+                # Nếu vẫn chưa tìm thấy, tiến hành quét thủ công qua các tab (đề phòng ô search không hoạt động)
+                if not is_visible_on_ui:
+                    print("[INFO] Chưa tìm thấy SBC qua ô Tìm kiếm. Tiến hành quét thủ công qua các tab...")
+                    tabs_to_try = ["Favourites", "Upgrades", "Challenges", "All"]
+                    for tab_name in tabs_to_try:
+                        try:
+                            tab_btn = page.locator(f"button:has-text('{tab_name}')").first
+                            if tab_btn.count() > 0:
+                                print(f"[INFO] Đang click tab '{tab_name}'...")
+                                tab_btn.click()
+                                sleep_human_like(1.5, 2.5)
+                                
+                                # Xóa ô tìm kiếm nếu đang có chữ để hiển thị lại toàn bộ danh mục của tab này
+                                try:
+                                    search_input = page.locator("input[placeholder='Search'], .ut-sbc-hub-view input.search, .search input").first
+                                    if search_input.count() > 0:
+                                        search_input.click()
+                                        page.keyboard.press("Control+A")
+                                        page.keyboard.press("Backspace")
+                                        sleep_human_like(0.8, 1.5)
+                                except Exception:
+                                    pass
+                                
+                                # Cuộn xuống để tải thêm các SBC trong tab này
+                                print("[INFO] Đang cuộn xuống để tải thêm các SBC trong tab...")
+                                for scroll_attempt in range(3):
+                                    page.evaluate("""
+                                        window.scrollTo(0, document.body.scrollHeight);
+                                        const containers = document.querySelectorAll('.ut-navigation-container-view, .ut-sbc-hub-view, .ut-sbc-grid-view');
+                                        containers.forEach(c => {
+                                            c.scrollTop = c.scrollHeight;
+                                        });
+                                    """)
+                                    sleep_human_like(0.6, 1.0)
+                                
+                                # Tìm kiếm bằng bộ lọc trực tiếp của Playwright
+                                try:
+                                    tile_locator = find_sbc_tile(page, original_sbc_name)
+                                    if tile_locator is not None:
+                                        is_visible_on_ui = True
+                                        print(f"[OK] Tìm thấy SBC '{original_sbc_name}' tại tab '{tab_name}'!")
+                                except Exception as scan_err:
+                                    print(f"[WARNING] Lỗi khi quét tìm tile trong tab '{tab_name}': {scan_err}")
+                                
+                                if is_visible_on_ui:
+                                    break
+                        except Exception as tab_err:
+                            print(f"[WARNING] Lỗi khi quét tab '{tab_name}': {tab_err}")
+                
+                # Dọn dẹp ô search sau khi tìm kiếm xong để không ảnh hưởng lượt quét SBC tiếp theo
+                try:
+                    search_input = page.locator("input[placeholder='Search'], .ut-sbc-hub-view input.search, .search input").first
+                    if search_input.count() > 0 and search_input.is_visible():
+                        search_input.click()
+                        page.keyboard.press("Control+A")
+                        page.keyboard.press("Backspace")
+                        sleep_human_like(0.5, 1.0)
                 except Exception:
                     pass
 
                 if not is_visible_on_ui:
-                    # Nếu thực sự không thấy SBC trên giao diện Favourites:
                     if sbc_count > 0:
-                        print(f"[INFO] SBC '{original_sbc_name}' không còn xuất hiện trong Favourites nữa (đã hoàn thành hết lượt khả dụng). Chuyển sang bước tiếp theo...")
+                        print(f"[INFO] SBC '{original_sbc_name}' không còn xuất hiện trên giao diện nữa (đã hoàn thành hết lượt khả dụng). Chuyển sang bước tiếp theo...")
                         break
                     else:
-                        error_msg = f"Không tìm thấy SBC '{original_sbc_name}' đang hiển thị trong Favourites!"
+                        error_msg = f"Không tìm thấy SBC '{original_sbc_name}' trên giao diện sau khi thử mọi cách!"
                         print(f"[ERROR] {error_msg}")
                         alert_user_error(page, config, error_msg)
                         print("[WARNING] Bỏ qua tác vụ SBC này để tiếp tục các tác vụ khác (hoặc mở Pack)...")
@@ -621,24 +984,17 @@ def run():
                 sbc_name = original_sbc_name
                 resolved_sbc = True
                 
-                if sbc_count == 0:
-                    try:
-                        avail_repeats = None
-                        tile_text = tile_locator.text_content()
-                        if tile_text:
-                            match = re.search(r'[Rr]epeatable\s*:\s*(\d+)', tile_text)
-                            if match:
-                                avail_repeats = int(match.group(1))
-                                print(f"[INFO] Quét thấy thông tin: '{sbc_name}' có Repeatable: {avail_repeats}")
-                        
-                        if avail_repeats is not None:
-                            if avail_repeats < max_repeats:
-                                print(f"[INFO] Giới hạn lại số lần chạy từ {max_repeats} xuống {avail_repeats} lượt repeatable khả dụng trên giao diện.")
-                                max_repeats = avail_repeats
-                            elif avail_repeats > max_repeats:
-                                print(f"[INFO] Số lượt repeatable trên giao diện là {avail_repeats}, nhưng bot chỉ chạy tối đa {max_repeats} lần theo cấu hình.")
-                    except Exception as re_ex:
-                        print(f"[WARNING] Không thể tự động quét số lượt repeatable: {re_ex}")
+
+                avail_repeats = get_sbc_repeats(tile_locator)
+                if avail_repeats is not None:
+                    if sbc_count == 0:
+                        new_max = min(max_repeats, avail_repeats)
+                        print(f"[INFO] Xác định số lượt repeatable khả dụng trên UI: {avail_repeats}. Cấu hình max_repeats: {max_repeats}. Thiết lập chạy: {new_max} lượt.")
+                        max_repeats = new_max
+                    else:
+                        print(f"[INFO] Lượt chạy {sbc_count + 1}/{max_repeats}. Số lượt repeatable còn lại phát hiện trên UI: {avail_repeats}")
+                else:
+                    print(f"[WARNING] Lượt chạy {sbc_count + 1}/{max_repeats}. Không thể quét số lượt repeatable từ giao diện. Chạy mặc định theo max_repeats cấu hình.")
 
                 print(f"[INFO] Finding SBC '{sbc_name}' in Favourites...")
                 try:
@@ -647,13 +1003,68 @@ def run():
                     print(f"[OK] Selected SBC: {sbc_name} (Repeat {sbc_count + 1})")
                     sleep_human_like(2.0, 3.0)
                     
-                    if sbc_count == 0 and config.get("setup_mode", False):
-                        print("\n" + "="*60)
-                        print("[SETUP MODE] Bot paused at SBC screen for template setup.")
-                        print("Please configure SBC template in PaleTools on the browser.")
-                        print("Once template is saved, return here and press [ENTER].")
-                        print("="*60 + "\n")
-                        input("Press [ENTER] after template setup in PaleTools to continue...")
+                    # Tự động phát hiện xem có cần cấu hình template hay không bằng cách check nút Build Using Template của PaleTools
+                    is_template_disabled = page.evaluate("""() => {
+                        const buttons = Array.from(document.querySelectorAll('button'));
+                        const tBtn = buttons.find(b => {
+                            const txt = b.innerText.toLowerCase();
+                            return txt.includes('template') || txt.includes('bằng mẫu') || txt.includes('plantilla') || txt.includes('modelo');
+                        });
+                        if (tBtn) {
+                            return tBtn.disabled || tBtn.classList.contains('disabled') || tBtn.getAttribute('disabled') !== null;
+                        }
+                        return true;
+                    }""")
+                    
+                    if (sbc_count == 0 and config.get("setup_mode", False)) or is_template_disabled:
+                        if is_template_disabled:
+                            print(f"[INFO] Nút 'Build Using Template' bị disabled hoặc không tìm thấy. Kích hoạt Setup Mode cho SBC '{sbc_name}'...")
+                        else:
+                            print("[SETUP MODE] Đang hiển thị nút tương tác trên Chrome. Hãy cấu hình template trong PaleTools...")
+                        
+                        # Inject nút bấm tương tác vào giao diện Web App
+                        page.evaluate("""() => {
+                            // Xóa nút cũ nếu có
+                            const oldBtn = document.getElementById('bot-resume-button');
+                            if (oldBtn) oldBtn.remove();
+                            
+                            const btn = document.createElement("button");
+                            btn.id = "bot-resume-button";
+                            btn.innerText = "★★★ BẤM VÀO ĐÂY SAU KHI CẤU HÌNH XONG TEMPLATE SBC ★★★";
+                            btn.style.position = "fixed";
+                            btn.style.top = "15px";
+                            btn.style.left = "50%";
+                            btn.style.transform = "translateX(-50%)";
+                            btn.style.zIndex = "999999";
+                            btn.style.padding = "15px 30px";
+                            btn.style.backgroundColor = "#28a745";
+                            btn.style.color = "white";
+                            btn.style.border = "3px solid #fff";
+                            btn.style.borderRadius = "8px";
+                            btn.style.fontWeight = "bold";
+                            btn.style.fontSize = "16px";
+                            btn.style.cursor = "pointer";
+                            btn.style.boxShadow = "0 8px 16px rgba(0,0,0,0.3)";
+                            btn.style.transition = "all 0.3s ease";
+                            
+                            btn.onmouseover = () => { btn.style.backgroundColor = "#218838"; };
+                            btn.onmouseout = () => { btn.style.backgroundColor = "#28a745"; };
+                            
+                            btn.onclick = () => {
+                                btn.innerText = "Đang kích hoạt bot...";
+                                btn.style.backgroundColor = "#d39e00";
+                                setTimeout(() => { btn.remove(); }, 800);
+                            };
+                            document.body.appendChild(btn);
+                        }""")
+                        
+                        # Chờ cho đến khi nút biến mất (do người dùng click)
+                        try:
+                            page.wait_for_selector("#bot-resume-button", state="detached", timeout=600000)
+                            print("[SETUP MODE] Đã xác nhận cấu hình xong. Tiếp tục chạy bot...")
+                        except Exception as wait_ex:
+                            print(f"[WARNING] Quá thời gian chờ cấu hình template: {wait_ex}")
+                        
                         sleep_human_like(1.5, 2.5)
                 except Exception as e:
                     print(f"[ERROR] Could not select SBC '{sbc_name}': {e}")
@@ -690,7 +1101,7 @@ def run():
                 sleep_human_like(0.2, 0.8)
                 confirm_selectors = [
                     "button:has-text('Submit Anyway')",
-                    "button:has-text('Submit and Don\'t Tell Me Again')",
+                    "button:has-text('Tell Me Again')",
                     ".ea-dialog-view button:has-text('Yes')",
                     ".ea-dialog-view button:has-text('Ok')",
                     ".ea-dialog-view button:has-text('Confirm')",
@@ -826,6 +1237,7 @@ def run():
             print(f"[STORE] Searching for pack: {pack_name}")
             
             while True:
+                check_pause(page)
                 # Đảm bảo chuyển sang trang My Packs trước khi quét
                 if not navigate_to_my_packs(page, config):
                     print("[ERROR] Không thể chuyển sang trang My Packs. Bỏ qua pack này.")
@@ -859,7 +1271,10 @@ def run():
                         for tile in pack_tiles:
                             p_name, p_qty = get_pack_info(tile)
                             if p_name:
-                                available_packs_with_qty[p_name] = p_qty
+                                if p_name in available_packs_with_qty:
+                                    available_packs_with_qty[p_name] += p_qty
+                                else:
+                                    available_packs_with_qty[p_name] = p_qty
                         available_packs = list(available_packs_with_qty.keys())
                         
                         best_match = find_best_match(pack_name, available_packs)
@@ -886,18 +1301,18 @@ def run():
                     if locator.count() > 0:
                         print(f"[OK] Đang mở pack: {resolved_pack_name} (Số lượng còn lại: {qty})")
                         locator.click()
-                        sleep_human_like(2.0, 3.0)
+                        sleep_human_like(1.0, 1.8)
                         
                         tile_parent = locator.locator("xpath=./ancestor::*[contains(@class, 'tile') or contains(@class, 'Tile') or contains(@class, 'pack')]").first
                         open_btn = tile_parent.locator("button").first if tile_parent.count() > 0 else locator.locator("button").first
                         if open_btn.count() > 0:
                             open_btn.click()
-                            sleep_human_like(5.0, 8.0)
+                            sleep_human_like(1.5, 2.5)
                             
                             # Tự động xử lý vật phẩm unassigned (gửi vào Club/SBC Storage) sau khi mở pack
                             handle_unassigned_items(page, config)
                             # Đợi giao diện quay lại Store
-                            sleep_human_like(3.0, 4.0)
+                            sleep_human_like(0.5, 1.2)
                             wait_for_click_shield(page)
                         else:
                             print(f"[WARNING] Không tìm thấy nút xác nhận mở cho pack: {resolved_pack_name}")

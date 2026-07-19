@@ -4,6 +4,11 @@ description: Tự động hóa làm SBC và mở Pack trên EA FC UT Web App tí
 ---
 # Skill Tự động hóa làm SBC và mở Pack trên EA FC UT Web App
 
+> [!IMPORTANT]
+> **QUY ĐỊNH VẬN HÀNH BẮT BUỘC ĐỐI VỚI AI AGENT:**
+> - Việc chạy skill phải được tự động kích hoạt hoàn toàn. **TUYỆT ĐỐI KHÔNG BẮT NGƯỜI DÙNG PHẢI TỰ CHẠY LỆNH** hay các file .bat.
+> - Tất cả các thao tác phải được chạy trực quan trên trình duyệt Google Chrome hiển thị giao diện (`headless=False`). **NGHIÊM CẤM CHẠY NGẦM (HEADLESS)**.
+
 Skill này tự động hóa việc hoàn thành các SBC yêu thích và mở pack phần thưởng trực tiếp trên EA Sports FC Ultimate Team Web App thông qua Playwright và PaleTools.
 
 ## Hướng dẫn sử dụng:
