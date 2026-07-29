@@ -314,6 +314,44 @@ def handle_unassigned_items(page, config):
     except Exception as e:
         print(f"[WARNING] Lỗi khi quay lại Store/My Packs: {e}")
 
+    # Kiểm tra xem sau khi dọn dẹp, màn hình unassigned còn tồn tại không
+    still_unassigned = False
+    try:
+        if page.locator(".ut-unassigned-view, .unassigned-view").first.is_visible():
+            still_unassigned = True
+    except Exception:
+        pass
+        
+    # Kiểm tra xem có dialog cảnh báo Unassigned Items nào che khuất không
+    has_unassigned_dialog = False
+    try:
+        dialog = page.locator(".ea-dialog-view, .dialog-modal").first
+        if dialog.count() > 0 and dialog.is_visible():
+            d_text = dialog.text_content().lower()
+            if any(kw in d_text for kw in ["unassigned items", "vật phẩm chưa phân phối", "unassigned", "sbc storage is full", "kho chứa sbc đã đầy"]):
+                has_unassigned_dialog = True
+                print(f"[WARNING] Phát hiện hộp thoại cảnh báo: '{dialog.text_content().strip()}'")
+    except Exception:
+        pass
+        
+    if still_unassigned or has_unassigned_dialog:
+        # Kích hoạt tạm dừng bot tự động
+        trigger_bot_pause(page, "Phát hiện vật phẩm chưa phân phối (Unassigned Items) vẫn còn tồn tại. Có thể kho chứa SBC (SBC Storage) đã đầy 100/100.")
+        # Tự động click tắt dialog cảnh báo nếu có để màn hình hiển thị sạch sẽ
+        if has_unassigned_dialog:
+            try:
+                ok_btn = page.locator(".ea-dialog-view button:has-text('Ok'), .ea-dialog-view button:has-text('OK'), .ea-dialog-view button:has-text('Confirm'), .ea-dialog-view button:has-text('Xác nhận')").first
+                if ok_btn.count() > 0 and ok_btn.is_visible():
+                    ok_btn.click()
+                    sleep_human_like(0.5, 1.0)
+            except Exception:
+                pass
+        # Gọi check_pause để bot lập tức tạm dừng
+        check_pause(page)
+        return False
+        
+    return True
+
 def load_paletools_js():
     txt_path = os.path.join(BASE_DIR, "paletools.txt")
     if os.path.exists(txt_path):
@@ -522,6 +560,32 @@ def check_pause(page):
 
     except Exception as e:
         print(f"[WARNING] Lỗi trong check_pause: {e}")
+
+def trigger_bot_pause(page, reason):
+    print(f"\n[ALERT] KÍCH HOẠT TẠM DỪNG BOT TỰ ĐỘNG! Lý do: {reason}")
+    try:
+        page.evaluate("""() => {
+            let btn = document.getElementById('bot-pause-btn');
+            let statusText = document.getElementById('bot-status-text');
+            if (btn) {
+                btn.setAttribute('data-status', 'paused');
+                btn.innerText = 'TIẾP TỤC (Resume)';
+                btn.style.background = '#00ff88';
+                btn.style.color = '#000';
+            }
+            if (statusText) {
+                statusText.innerText = 'ĐÃ TẠM DỪNG';
+                statusText.style.color = '#ff3366';
+            }
+        }""")
+        
+        # Phát âm thanh cảnh báo lỗi nếu chạy trên macOS
+        if sys.platform == "darwin":
+            os.system("say 'Attention, bot paused due to unassigned items'")
+            os.system("afplay /System/Library/Sounds/Glass.aiff &")
+            
+    except Exception as e:
+        print(f"[WARNING] Không thể kích hoạt nút tạm dừng qua JS: {e}")
 
 def get_pack_info(tile):
     pack_name = None
@@ -1229,6 +1293,7 @@ def execute_open_pack_step(page, config, paletools_js, pack_name, open_count=Non
     
     while True:
         check_pause(page)
+        dismiss_modals(page)
         
         # Kiểm tra điều kiện dừng:
         if not open_all and open_count is not None and opened_so_far >= open_count:
@@ -1297,6 +1362,7 @@ def execute_open_pack_step(page, config, paletools_js, pack_name, open_count=Non
             
             if locator.count() > 0:
                 print(f"[OK] Đang mở pack: {resolved_pack_name} (Lượt {opened_so_far + 1})")
+                dismiss_modals(page)
                 locator.click()
                 sleep_human_like(1.0, 1.8)
                 

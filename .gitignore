@@ -10,8 +10,9 @@
 # Personal configuration containing Telegram token (CRITICAL)
 .agents/skills/fc_sbc_bot/config.json
 
-# Debug screenshots
+# Debug screenshots and logs
 **/*.png
+**/*.log
 
 # macOS system files
 .DS_Store
