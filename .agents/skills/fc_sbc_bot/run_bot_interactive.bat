@@ -1,5 +1,5 @@
 @echo off
 title === FC SBC BOT RUNNING INTERACTIVELY ===
-cd /d "d:\Lap Trinh\FC 26 Tool\.agents\skills\fc_sbc_bot"
+cd /d "%~dp0"
 python -u main.py
 pause

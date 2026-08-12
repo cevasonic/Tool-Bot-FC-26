@@ -59,7 +59,7 @@ def dismiss_modals(page):
                     modal = modals.nth(i)
                     if modal.is_visible():
                         print(f"[INFO] Phát hiện modal '{sel}' đang che khuất màn hình. Tiến hành đóng...")
-                        close_btn = modal.locator("button.close, .btn-flat, .dialog-close-btn, button:has-text('OK'), button:has-text('Close'), button:has-text('Đóng'), button:has-text('Tắt'), button:has-text('Accept')").first
+                        close_btn = modal.locator("button.close, .btn-flat, .dialog-close-btn, button:has-text('OK'), button:has-text('Close'), .btn-standard:has-text('OK'), .btn-standard:has-text('Close'), .btn-standard:has-text('Ok'), button:has-text('Đóng'), button:has-text('Tắt'), button:has-text('Accept')").first
                         if close_btn.count() > 0 and close_btn.is_visible():
                             try:
                                 close_btn.click(timeout=2000, force=True)
@@ -70,13 +70,6 @@ def dismiss_modals(page):
                         if modal.is_visible():
                             page.keyboard.press("Escape")
                             sleep_human_like(0.5, 1.0, page)
-                            
-                        if modal.is_visible():
-                            try:
-                                page.evaluate("(sel) => { document.querySelectorAll(sel).forEach(el => el.style.display = 'none'); }", sel)
-                                sleep_human_like(0.3, 0.5, page)
-                            except Exception:
-                                pass
     except Exception:
         pass
 
@@ -104,3 +97,37 @@ def check_captcha_or_errors(page, config):
         input()
         print("[INFO] Resuming...")
         sleep_human_like(2.0, 3.0, page)
+
+def recover_from_crash(page, config, paletools_js):
+    import os
+    import json
+    from src.config import BASE_DIR
+    print("\n[WARNING] Phát hiện Web App có dấu hiệu bị sập hoặc đơ giao diện. Tiến hành reload trang để tự động khôi phục...")
+    try:
+        # Chụp ảnh debug trước khi reload
+        try:
+            os.makedirs(os.path.join(BASE_DIR, "logs"), exist_ok=True)
+            page.screenshot(path=os.path.join(BASE_DIR, "logs", "crash_before_reload.png"))
+        except Exception:
+            pass
+            
+        page.reload()
+        # Chờ Dashboard tải lại (tab bar xuất hiện)
+        print("[INFO] Đang chờ Web App tải lại giao diện Dashboard...")
+        page.wait_for_selector(".ut-tab-bar", timeout=90000)
+        print("[OK] Đã tải xong Dashboard. Tiến hành nạp lại PaleTools...")
+        sleep_human_like(2.0, 4.0, page)
+        
+        # Nạp lại PaleTools
+        page.evaluate(f"eval({json.dumps(paletools_js)})")
+        time.sleep(5)
+        dismiss_modals(page)
+        
+        # Tạo lại overlay panel
+        from src.paletools import ensure_bot_overlay
+        ensure_bot_overlay(page)
+        print("[OK] Đã khôi phục giao diện Web App thành công!\n")
+        return True
+    except Exception as reload_err:
+        print(f"[ERROR] Không thể tự động khôi phục Web App: {reload_err}")
+        return False

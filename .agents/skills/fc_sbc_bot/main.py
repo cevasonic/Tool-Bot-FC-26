@@ -63,6 +63,11 @@ def run():
             page.evaluate(f"eval({json.dumps(paletools_js)})")
             print("[OK] PaleTools đã được nạp thành công. Chờ 5 giây để khởi động...")
             time.sleep(5)
+            # Reset trạng thái bot về running khi khởi động bot phiên mới
+            try:
+                page.evaluate("sessionStorage.setItem('bot_status', 'running')")
+            except Exception:
+                pass
             dismiss_modals(page)
             try:
                 page.evaluate("document.title = '★★★ BOT CHROME WINDOW - THAO TAC TAI DAY ★★★'")
@@ -89,6 +94,12 @@ def run():
             print(f"\n============================================================")
             print(f"[WORKFLOW LOOP] BẮT ĐẦU VÒNG LẶP WORKFLOW THỨ {loop_count}/{max_loops}")
             print(f"============================================================\n")
+            
+            # Đặt lại trạng thái hoàn thành của các tác vụ mở pack ở đầu vòng lặp mới (từ vòng 2 trở đi)
+            if loop_count > 1:
+                for idx, step_cfg in enumerate(workflow):
+                    if step_cfg.get("type") == "open_pack":
+                        steps_finished[idx] = False
             
             any_sbc_made_progress = False
             session_lost = False
@@ -129,11 +140,8 @@ def run():
                     
                     save_count_key = step_cfg.get("save_count_key")
                     if save_count_key:
-                        if save_count_key in context_vars:
-                            context_vars[save_count_key] += success_count
-                        else:
-                            context_vars[save_count_key] = success_count
-                        print(f"[WORKFLOW] Đã lưu số lần SBC thành công tích lũy: {context_vars[save_count_key]} lần vào biến '{save_count_key}'")
+                        context_vars[save_count_key] = success_count
+                        print(f"[WORKFLOW] Đã lưu số lần SBC thành công của lượt này: {context_vars[save_count_key]} lần vào biến '{save_count_key}'")
                         
                 elif step_type == "open_pack":
                     # Nếu bước mở pack này đã hoàn thành ở vòng lặp trước, bỏ qua

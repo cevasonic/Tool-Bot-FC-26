@@ -54,12 +54,53 @@ def find_best_match(target_name, available_names):
         if target_clean == name_clean:
             return name
             
-    # 3. Partial match (target inside available, or available inside target)
+    # 3. Thuật toán so khớp thông minh kiểm tra quy tắc loại trừ chéo nghiêm ngặt
+    target_words = [w.lower() for w in target_name.split() if w.lower() not in ["pack", "packs"]]
+    
+    exclusive_keywords = [
+        "premium", "rare", "common", "gold", "silver", "bronze", "jumbo", "ultimate", "mega",
+        "80+", "81+", "82+", "83+", "84+", "85+", "78", "80", "11x", "5x", "3x", "2x", "x2", "x3", "x5", "two", "three", "five"
+    ]
+    
+    best_match = None
+    max_overlap = 0
+    
     for name in available_names:
-        if target_name.lower() in name.lower() or name.lower() in target_name.lower():
-            return name
+        name_lower = name.lower()
+        name_words = [w.lower() for w in name.split() if w.lower() not in ["pack", "packs"]]
+        
+        # Kiểm tra quy tắc loại trừ chéo nghiêm ngặt:
+        # Bất kỳ từ khóa độc quyền nào (loại pack, số lượng, rating) lệch nhau đều coi là mismatch và loại bỏ
+        is_mismatch = False
+        for kw in exclusive_keywords:
+            in_name = any(kw in w for w in name_words)
+            in_target = any(kw in w for w in target_words)
+            if in_name != in_target:
+                is_mismatch = True
+                break
+                
+        if is_mismatch:
+            continue
             
-    return None
+        # Tính số từ trùng lặp
+        overlap = 0
+        for tw in target_words:
+            if any(tw in nw or nw in tw for nw in name_words):
+                overlap += 1
+                
+        # Tất cả các từ khóa chính trong cấu hình phải xuất hiện trong tên trên UI
+        essential_target_words = [w for w in target_words if w not in ["x2", "x3", "x5", "5x", "11x", "two", "three", "five"]]
+        all_essential_matched = True
+        for ew in essential_target_words:
+            if not any(ew in nw for nw in name_words):
+                all_essential_matched = False
+                break
+                
+        if all_essential_matched and overlap > max_overlap:
+            max_overlap = overlap
+            best_match = name
+            
+    return best_match
 
 def is_in_my_packs(page):
     try:
@@ -148,8 +189,13 @@ def open_single_supply_pack(page, config, paletools_js, pack_name):
     
     # Đảm bảo chuyển sang trang My Packs trước khi quét
     if not navigate_to_my_packs(page, config):
-        print("[ERROR] Không thể chuyển sang trang My Packs để tìm pack tiếp tế.")
-        return False
+        print("[ERROR] Không thể chuyển sang trang My Packs để tìm pack tiếp tế. Thử tự động khôi phục...")
+        from src.utils import recover_from_crash
+        if recover_from_crash(page, config, paletools_js) and navigate_to_my_packs(page, config):
+            print("[OK] Đã khôi phục và chuyển sang My Packs thành công!")
+        else:
+            print("[ERROR] Vẫn không thể chuyển sang trang My Packs sau khi khôi phục.")
+            return False
     
     # Đảm bảo PaleTools luôn được inject
     ensure_paletools_injected(page, paletools_js)
@@ -248,9 +294,20 @@ def execute_open_pack_step(page, config, paletools_js, pack_name, open_count=Non
             
         # Đảm bảo chuyển sang trang My Packs trước khi quét
         if not navigate_to_my_packs(page, config):
-            print("[ERROR] Không thể chuyển sang trang My Packs. Dừng bước mở pack này.")
-            is_finished = False
-            break
+            print("[ERROR] Không thể chuyển sang trang My Packs. Thử tự động khôi phục bằng reload trang...")
+            from src.utils import recover_from_crash
+            if recover_from_crash(page, config, paletools_js):
+                # Thử lại sau khi khôi phục
+                if navigate_to_my_packs(page, config):
+                    print("[OK] Đã khôi phục và chuyển sang My Packs thành công!")
+                else:
+                    print("[ERROR] Vẫn không thể chuyển sang trang My Packs sau khi khôi phục. Dừng bước mở pack này.")
+                    is_finished = False
+                    break
+            else:
+                print("[ERROR] Khôi phục thất bại. Dừng bước mở pack này.")
+                is_finished = False
+                break
         
         # Đảm bảo PaleTools luôn được inject
         ensure_paletools_injected(page, paletools_js)

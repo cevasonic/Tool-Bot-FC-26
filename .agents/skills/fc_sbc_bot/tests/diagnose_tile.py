@@ -16,10 +16,10 @@ def main():
     user_data_dir = os.path.join(BASE_DIR, "chrome_profile")
     
     with sync_playwright() as p:
-        print("[INFO] Launching Chrome headless...")
+        print("[INFO] Launching Chrome (headless=False)...")
         context = p.chromium.launch_persistent_context(
             user_data_dir=user_data_dir,
-            headless=True,
+            headless=False,
             args=[
                 "--disable-blink-features=AutomationControlled",
                 "--no-sandbox"

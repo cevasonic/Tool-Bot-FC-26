@@ -74,6 +74,21 @@ def get_sbc_repeats(tile_locator):
         # Log debug
         print(f"[DEBUG_SBC] Thử phân tích tile text: '{' '.join(tile_text.split())}'")
         
+        # Loại bỏ các chuỗi thống kê số lần đã hoàn thành hoặc trạng thái số lượng để tránh match nhầm các từ khóa hoàn thành
+        # Ví dụ: "completed 75 times", "hoàn thành 104 lần", "completed 0 times"
+        clean_text = re.sub(r'(?:completed|hoàn\s*thành)\s*[\d.,]+\s*(?:times|lần)', '', tile_text_lower)
+        
+        # Kiểm tra nhanh các từ khóa biểu thị đã hoàn thành hoàn toàn (không bao gồm "complete" hay "completed" thô sơ vì dễ dính vào mô tả)
+        completed_keywords = [
+            "đã hoàn thành", "đã làm",
+            "expired", "đã hết hạn", "repeatable: 0", "repeat: 0", 
+            "0 repeatable", "0 left", "0 repeats", "0/10 repeatable", "0/3 repeatable"
+        ]
+        for kw in completed_keywords:
+            if kw in clean_text:
+                print(f"[DEBUG_SBC]   Khớp từ khóa completed nhanh: '{kw}'. Trả về 0.")
+                return 0
+                
         done_times = None
         
         # 1. Kiểm tra class hoặc status block biểu thị Completed
@@ -100,8 +115,14 @@ def get_sbc_repeats(tile_locator):
                             print(f"[DEBUG_SBC]     SBC chưa hoàn thành hết các squad ({done}/{total} < 100%). Tiếp tục kiểm tra.")
                             continue
                         else:
-                            # Đã xong các squad (ví dụ 1/1), nhưng nếu là repeatable thì vẫn có thể làm lại
-                            print(f"[DEBUG_SBC]     Đã xong các squad ({done}/{total}). Kiểm tra số lượt lặp lại.")
+                            # Đã xong các squad (ví dụ 1/1).
+                            # Nếu không có chữ "repeatable" / "lặp lại" / "làm lại" trong tile text, thì đây là SBC không lặp lại và đã hoàn thành!
+                            has_repeat_keywords = any(r in tile_text_lower for r in ["repeatable", "repeatable: ", "lặp lại", "lượt làm lại"])
+                            if not has_repeat_keywords:
+                                print(f"[DEBUG_SBC]     Đã hoàn thành các squad của SBC không lặp lại ({done}/{total}). Trả về 0.")
+                                return 0
+                            else:
+                                print(f"[DEBUG_SBC]     Đã xong các squad ({done}/{total}). Kiểm tra số lượt lặp lại.")
                     
                     if "completed" in block_text or "hoàn thành" in block_text:
                         # Chỉ coi là đã hoàn thành nếu KHÔNG phải là phân số dở dang (ví dụ 0/1) hoặc ghi nhận số lần đã làm
@@ -145,13 +166,14 @@ def get_sbc_repeats(tile_locator):
             pass
 
         # 4. Kiểm tra các từ khóa đặc trưng biểu thị hết hạn/hoàn thành nhưng loại trừ mô tả chung
+        # Không bao gồm "completed" hay "complete" hay "0/" thô sơ ở đây
         completed_keywords = [
             "đã hoàn thành", "đã làm", 
             "expired", "đã hết hạn", "repeatable: 0", "repeat: 0", 
-            "0 repeatable", "0 left", "0 repeats"
+            "0 repeatable", "0 left", "0 repeats", "0/10 repeatable", "0/3 repeatable"
         ]
         for kw in completed_keywords:
-            if kw in tile_text_lower:
+            if kw in clean_text:
                 print(f"[DEBUG_SBC]   Khớp từ khóa completed: '{kw}'. Trả về 0.")
                 return 0
 
@@ -168,6 +190,7 @@ def execute_sbc_step(page, config, paletools_js, sbc_name, max_repeats, complete
     sbc_count = 0
     consecutive_errors = 0
     is_finished = False
+    has_supplied_this_run = False
     
     # Kiểm tra và dọn dẹp unassigned items trước khi bắt đầu các lượt SBC
     check_unassigned_badge_and_clear(page, config)
@@ -200,6 +223,13 @@ def execute_sbc_step(page, config, paletools_js, sbc_name, max_repeats, complete
         except Exception as e:
             print(f"[ERROR] Không thể di chuyển tới menu SBC: {e}")
             alert_user_error(page, config, "Lỗi di chuyển tới menu SBC")
+            
+            # Thử tự động khôi phục bằng cách reload trang
+            from src.utils import recover_from_crash
+            if recover_from_crash(page, config, paletools_js):
+                consecutive_errors = 0
+                continue
+                
             consecutive_errors += 1
             if consecutive_errors >= 3:
                 print("[ERROR] Quá nhiều lỗi điều hướng liên tiếp. Dừng bước SBC này.")
@@ -453,48 +483,72 @@ def execute_sbc_step(page, config, paletools_js, sbc_name, max_repeats, complete
                 else:
                     print("[SETUP MODE] Đang hiển thị nút tương tác trên Chrome. Hãy cấu hình template trong PaleTools...")
                 
-                # Inject nút bấm tương tác vào giao diện Web App
-                page.evaluate("""() => {
-                    // Xóa nút cũ nếu có
-                    const oldBtn = document.getElementById('bot-resume-button');
-                    if (oldBtn) oldBtn.remove();
-                    
-                    const btn = document.createElement("button");
-                    btn.id = "bot-resume-button";
-                    btn.innerText = "★★★ BẤM VÀO ĐÂY SAU KHI CẤU HÌNH XONG TEMPLATE SBC ★★★";
-                    btn.style.position = "fixed";
-                    btn.style.top = "15px";
-                    btn.style.left = "50%";
-                    btn.style.transform = "translateX(-50%)";
-                    btn.style.zIndex = "999999";
-                    btn.style.padding = "15px 30px";
-                    btn.style.backgroundColor = "#28a745";
-                    btn.style.color = "white";
-                    btn.style.border = "3px solid #fff";
-                    btn.style.borderRadius = "8px";
-                    btn.style.fontWeight = "bold";
-                    btn.style.fontSize = "16px";
-                    btn.style.cursor = "pointer";
-                    btn.style.boxShadow = "0 8px 16px rgba(0,0,0,0.3)";
-                    btn.style.transition = "all 0.3s ease";
-                    
-                    btn.onmouseover = () => { btn.style.backgroundColor = "#218838"; };
-                    btn.onmouseout = () => { btn.style.backgroundColor = "#28a745"; };
-                    
-                    btn.onclick = () => {
-                        btn.innerText = "Đang kích hoạt bot...";
-                        btn.style.backgroundColor = "#d39e00";
-                        setTimeout(() => { btn.remove(); }, 800);
-                    };
-                    document.body.appendChild(btn);
-                }""")
-                
-                # Chờ cho đến khi nút biến mất (do người dùng click)
                 try:
-                    page.wait_for_selector("#bot-resume-button", state="detached", timeout=600000)
-                    print("[SETUP MODE] Đã xác nhận cấu hình xong. Tiếp tục chạy bot...")
-                except Exception as wait_ex:
-                    print(f"[WARNING] Quá thời gian chờ cấu hình template: {wait_ex}")
+                    page.evaluate("window.bot_setup_completed = false")
+                except Exception:
+                    pass
+                
+                setup_start = time.time()
+                timeout = 600.0  # 10 phút
+                printed_log = False
+                
+                while time.time() - setup_start < timeout:
+                    try:
+                        completed = page.evaluate("!!window.bot_setup_completed")
+                        if completed:
+                            print("[SETUP MODE] Đã xác nhận cấu hình xong. Tiếp tục chạy bot...")
+                            break
+                    except Exception:
+                        pass
+                    
+                    # Vẽ lại nút nếu nó bị mất do Web App render lại
+                    try:
+                        has_btn = page.evaluate("!!document.getElementById('bot-resume-button')")
+                        if not has_btn:
+                            if not printed_log:
+                                print("[SETUP MODE] Vẽ nút kích hoạt bot và chờ bạn cấu hình template trên giao diện Web App...")
+                                printed_log = True
+                            
+                            page.evaluate("""() => {
+                                const oldBtn = document.getElementById('bot-resume-button');
+                                if (oldBtn) oldBtn.remove();
+                                
+                                const btn = document.createElement("button");
+                                btn.id = "bot-resume-button";
+                                btn.innerText = "★★★ BẤM VÀO ĐÂY SAU KHI CẤU HÌNH XONG TEMPLATE SBC ★★★";
+                                btn.style.position = "fixed";
+                                btn.style.top = "15px";
+                                btn.style.left = "50%";
+                                btn.style.transform = "translateX(-50%)";
+                                btn.style.zIndex = "999999";
+                                btn.style.padding = "15px 30px";
+                                btn.style.backgroundColor = "#28a745";
+                                btn.style.color = "white";
+                                btn.style.border = "3px solid #fff";
+                                btn.style.borderRadius = "8px";
+                                btn.style.fontWeight = "bold";
+                                btn.style.fontSize = "16px";
+                                btn.style.cursor = "pointer";
+                                btn.style.boxShadow = "0 8px 16px rgba(0,0,0,0.3)";
+                                btn.style.transition = "all 0.3s ease";
+                                
+                                btn.onmouseover = () => { btn.style.backgroundColor = "#218838"; };
+                                btn.onmouseout = () => { btn.style.backgroundColor = "#28a745"; };
+                                
+                                btn.onclick = () => {
+                                    btn.innerText = "Đang kích hoạt bot...";
+                                    btn.style.backgroundColor = "#d39e00";
+                                    window.bot_setup_completed = true;
+                                    setTimeout(() => { btn.remove(); }, 800);
+                                };
+                                document.body.appendChild(btn);
+                            }""")
+                    except Exception:
+                        pass
+                    
+                    time.sleep(1.0)
+                else:
+                    print("[WARNING] Quá thời gian chờ cấu hình template (10 phút). Chạy tiếp tục.")
                 
                 sleep_human_like(1.5, 2.5, page)
         except Exception as e:
@@ -517,66 +571,13 @@ def execute_sbc_step(page, config, paletools_js, sbc_name, max_repeats, complete
         
         sleep_human_like(delays.get("after_build_min", 2.5), delays.get("after_build_max", 4.5), page)
         
-        # Kiểm tra xem đội hình có chứa cầu thủ Concept nào không trước khi bấm Submit
-        is_concept_detected = check_concept_players_in_squad(page)
-        is_ineligible = False
+        # Kiểm tra xem đội hình có chứa cầu thủ Concept nào không hoặc trống/thiếu thẻ
+        # (Ở đây ta cứ bấm 'T' xong là bấm 'S' thử submit trước. Nếu kẹt mới kiểm tra nguyên nhân)
+        print("[RPA] Nhấn phím 'S' để thực hiện Submit...")
+        page.keyboard.press("s")
+        sleep_human_like(2.0, 3.0, page)
         
-        if is_concept_detected:
-            is_ineligible = True
-            print("[INFO] Đội hình chứa cầu thủ Concept. Đang quay lại danh sách SBC để tiếp tế thẻ...")
-            try:
-                page.keyboard.press("Escape")
-                sleep_human_like(1.5, 2.5, page)
-                # Đề phòng kẹt, bấm nút Back của Web App
-                back_btn = page.locator(".ut-navigation-bar button.ut-navigation-button-control--prev, .ut-navigation-bar button.back").first
-                if back_btn.count() > 0 and back_btn.is_visible():
-                    back_btn.click()
-                    sleep_human_like(1.5, 2.5, page)
-            except Exception as back_err:
-                print(f"[WARNING] Lỗi khi bấm Back để thoát Builder: {back_err}")
-        else:
-            print("[RPA] Nhấn phím 'S' để Submit...")
-            page.keyboard.press("s")
-            
-            # Chụp ảnh debug trạng thái submit
-            time.sleep(1.0)
-            try:
-                debug_screenshot_path = os.path.join(BASE_DIR, "logs", "submit_debug.png")
-                page.screenshot(path=debug_screenshot_path)
-                print(f"[INFO] Đã lưu ảnh chụp debug submit tại: {debug_screenshot_path}")
-            except Exception as de_ex:
-                print(f"[WARNING] Không thể chụp ảnh debug submit: {de_ex}")
-            
-            # 1. Kiểm tra hộp thoại báo lỗi không đủ điều kiện (Ineligible Squad do dính cầu thủ Concept/Loan từ EA)
-            try:
-                dialog_el = page.locator(".ea-dialog-view, .dialog-modal").first
-                if dialog_el.count() > 0 and dialog_el.is_visible():
-                    d_text = dialog_el.text_content().lower()
-                    if any(kw in d_text for kw in ["ineligible squad", "concept", "loan", "cannot be submitted", "không đủ điều kiện"]):
-                        is_ineligible = True
-                        print(f"[WARNING] SBC '{sbc_name}' chứa cầu thủ Concept/Loan hoặc không đủ điều kiện (hết cầu thủ thực trong CLB).")
-                        ok_btn = dialog_el.locator("button:has-text('Ok'), button:has-text('OK'), button.close").first
-                        if ok_btn.count() > 0 and ok_btn.is_visible():
-                            ok_btn.click()
-                        else:
-                            page.keyboard.press("Escape")
-                        sleep_human_like(1.0, 1.5, page)
-                        page.keyboard.press("Escape")
-                        sleep_human_like(1.5, 2.0, page)
-            except Exception:
-                pass
-
-        if is_ineligible:
-            if supply_pack_name:
-                print(f"[INFO] Thiếu thẻ cho SBC '{sbc_name}'. Thử mở 1 pack tiếp tế '{supply_pack_name}'...")
-                opened = open_single_supply_pack(page, config, paletools_js, supply_pack_name)
-                if opened:
-                    print(f"[OK] Đã mở thành công pack tiếp tế. Quay lại làm tiếp SBC '{sbc_name}'...")
-                    continue
-            print(f"[INFO] Tự động dừng làm SBC '{sbc_name}' do đã hết cầu thủ hợp lệ trong CLB.")
-            is_finished = True
-            break
-
+        # 1. Xử lý các hộp thoại xác nhận submit nếu xuất hiện (Submit Anyway, Confirm, v.v.)
         confirm_selectors = [
             "button:has-text('Submit Anyway')",
             "button:has-text('Tell Me Again')",
@@ -584,108 +585,143 @@ def execute_sbc_step(page, config, paletools_js, sbc_name, max_repeats, complete
             ".ea-dialog-view button:has-text('Ok')",
             ".ea-dialog-view button:has-text('Confirm')",
             ".ea-dialog-view button:has-text('Có')",
-            ".ea-dialog-view button:has-text('Xác nhận')"
+            ".ea-dialog-view button:has-text('Xác nhận')",
+            "button:has-text('Ok')",
+            "button:has-text('OK')"
         ]
-        dialog_found = False
         for c_sel in confirm_selectors:
             try:
                 c_btn = page.locator(c_sel).first
                 if c_btn.count() > 0 and c_btn.is_visible():
                     print(f"[RPA] Phát hiện hộp thoại xác nhận submit: '{c_btn.text_content().strip()}'. Đang click...")
                     c_btn.click()
-                    dialog_found = True
                     sleep_human_like(1.5, 2.5, page)
                     break
             except Exception:
                 pass
-        
-        # Kiểm tra thông báo lỗi màu đỏ (negative notifications) từ Web App
-        submit_success = True
-        try:
-            error_notif = page.locator(".notification.negative, .ut-notification-bar.negative").first
-            if error_notif.count() > 0 and error_notif.is_visible():
-                err_text = error_notif.text_content().strip() if error_notif.text_content() else "Lỗi không xác định"
-                print(f"[ERROR] Phát hiện lỗi submit từ Web App: '{err_text}'")
-                submit_success = False
-        except Exception:
-            pass
-
-        # Kiểm tra xem có modal container nào hiển thị không
-        is_modal_visible = False
-        try:
-            modal = page.locator(".view-modal-container, .ea-dialog-view").first
-            if modal.count() > 0 and modal.is_visible():
-                is_modal_visible = True
-        except Exception:
-            pass
-
-        # Nếu vẫn còn nút Submit hiển thị và click được trên giao diện, và KHÔNG có modal nào che khuất
-        if submit_success and not is_modal_visible:
-            try:
-                submit_btn = page.locator("button:has-text('Submit'), button.submit, .sbc-submit-button").first
-                if submit_btn.count() > 0 and submit_btn.is_visible() and submit_btn.is_enabled():
-                    print("[RPA] Phím tắt 's' có vẻ không hoạt động hoặc kẹt. Thử click trực tiếp nút Submit trên UI...")
-                    submit_btn.click()
-                    sleep_human_like(1.2, 1.8, page)
-                    
-                    # Quét lại dialog một lần nữa sau khi click trực tiếp
-                    for c_sel in confirm_selectors:
-                        c_btn = page.locator(c_sel).first
-                        if c_btn.count() > 0 and c_btn.is_visible():
-                            print(f"[RPA] Phát hiện hộp thoại xác nhận sau khi click Submit: '{c_btn.text_content().strip()}'. Đang click...")
-                            c_btn.click()
-                            sleep_human_like(1.5, 2.5, page)
-                            break
-            except Exception as click_ex:
-                print(f"[WARNING] Không thể click nút Submit trên UI: {click_ex}")
-
-        # Xác thực xem đã thực sự submit thành công hay chưa
-        submit_verified = False
-        if submit_success:
-            # 1. Thử tìm và click Claim Rewards (nếu xuất hiện)
-            try:
-                claim_btn = page.locator("button:has-text('Claim Rewards')").first
-                if claim_btn.count() > 0 and claim_btn.is_visible():
-                    print(f"[RPA] Đang bấm Claim Rewards cho lượt {sbc_count + 1}...")
-                    claim_btn.click()
-                    submit_verified = True
-                    sleep_human_like(2.0, 3.0, page)
-            except Exception:
-                pass
-
-            # 2. Kiểm tra xem giao diện đã tự động quay về màn hình Favourites chưa
-            if not submit_verified:
-                is_back_to_list = False
-                try:
-                    fav_btn = page.locator("button:has-text('Favourites')").first
-                    if fav_btn.count() > 0 and fav_btn.is_visible():
-                        is_back_to_list = True
-                except Exception:
-                    pass
                 
-                if is_back_to_list:
-                    print(f"[OK] Submit thành công lượt {sbc_count + 1} (Giao diện tự động quay lại danh sách).")
-                    submit_verified = True
-
-        # Xử lý kết quả xác thực
-        if submit_verified:
-            sbc_count += 1
-            completed_sbcs_total += 1
-            consecutive_errors = 0  # Reset số lỗi liên tiếp
-            print(f"[OK] Đã hoàn thành lượt {sbc_count}.")
-        else:
-            print(f"[WARNING] Lượt {sbc_count + 1} chưa được submit thành công (vẫn kẹt ở màn hình build squad hoặc có lỗi).")
+        # 2. Xác thực xem đã submit thành công chưa (Builder biến mất hoặc có nút Claim Rewards)
+        submit_verified = False
+        
+        # Thử tìm và click Claim Rewards (nếu xuất hiện)
+        try:
+            claim_btn = page.locator("button:has-text('Claim Rewards')").first
+            if claim_btn.count() > 0 and claim_btn.is_visible():
+                print(f"[RPA] Đang bấm Claim Rewards cho lượt {sbc_count + 1}...")
+                claim_btn.click()
+                submit_verified = True
+                sleep_human_like(2.0, 3.0, page)
+        except Exception:
+            pass
+            
+        # Kiểm tra xem đã quay về màn hình Favourites/SBC List chưa
+        if not submit_verified:
             try:
-                page.keyboard.press("Escape")
+                # Nếu không còn ở màn hình Squad Builder (ví dụ: không còn nút Back của Builder hoặc không còn sân bóng)
+                # Hoặc nếu tìm thấy tiêu đề của danh sách SBC (Favourites)
+                fav_btn = page.locator("button:has-text('Favourites')").first
+                is_back_to_list = (fav_btn.count() > 0 and fav_btn.is_visible()) or (page.locator(".ut-squad-builder-value, .pitch, .squad-slot").count() == 0)
+                if is_back_to_list:
+                    submit_verified = True
             except Exception:
                 pass
-            sleep_human_like(2.0, 3.0, page)
+                
+        # 3. Xử lý trường hợp chưa submit thành công (vẫn kẹt ở Builder)
+        if not submit_verified:
+            print("[INFO] Vẫn còn ở màn hình Builder sau khi Submit. Đang quét nguyên nhân...")
+            
+            # Chụp ảnh debug
+            try:
+                debug_screenshot_path = os.path.join(BASE_DIR, "logs", "submit_debug.png")
+                page.screenshot(path=debug_screenshot_path)
+                print(f"[INFO] Đã lưu ảnh chụp debug submit tại: {debug_screenshot_path}")
+            except Exception:
+                pass
+                
+            # Kiểm tra xem có Dialog báo lỗi không đủ điều kiện (Ineligible Squad do dính cầu thủ Concept/Loan)
+            is_ineligible = False
+            try:
+                error_dialog = page.locator(".ea-dialog-view, .dialog-modal").filter(has_text=re.compile(r'(Ineligible Squad|Concept|Loan|Không đủ điều kiện|cannot be submitted)', re.IGNORECASE)).first
+                if error_dialog.count() > 0 and error_dialog.is_visible():
+                    is_ineligible = True
+                    print(f"[WARNING] Phát hiện Dialog lỗi: SBC '{sbc_name}' không đủ điều kiện.")
+                    
+                    # Click đóng Dialog lỗi
+                    ok_btn = error_dialog.locator("button, .btn-standard").filter(has_text=re.compile(r'^(Ok|OK|Confirm|Xác nhận)$', re.IGNORECASE)).first
+                    if ok_btn.count() > 0 and ok_btn.is_visible():
+                        ok_btn.click()
+                    else:
+                        page.keyboard.press("Escape")
+                    sleep_human_like(1.5, 2.5, page)
+            except Exception:
+                pass
+                
+            # Kiểm tra xem có cầu thủ Concept thực tế trên sân không
+            is_concept_detected = check_concept_players_in_squad(page)
+            
+            # Kiểm tra xem đội hình có bị trống trơn sau khi điền template không (lỗi No Players Found)
+            is_squad_empty = False
+            try:
+                player_count = page.evaluate("""() => {
+                    const slots = document.querySelectorAll('.pitch .player, .squad-slot .player, .pitch .player-card');
+                    return slots.length;
+                }""")
+                if player_count == 0:
+                    is_squad_empty = True
+                    print("[WARNING] Đội hình trống trơn (0 cầu thủ).")
+            except Exception:
+                pass
+                
+            # Kiểm tra thông báo "No Players Found"
+            is_no_players_toast = False
+            try:
+                toast_el = page.locator(".toast, .notification, [class*='toast'], [class*='notification'], .ut-toast, .ut-notification-bar").filter(has_text=re.compile(r'(No Players Found|Không tìm thấy cầu thủ|No players|No Players)', re.IGNORECASE)).first
+                if toast_el.count() > 0 and toast_el.is_visible():
+                    is_no_players_toast = True
+                    print(f"[WARNING] Phát hiện Toast lỗi: '{toast_el.text_content().strip()}'.")
+            except Exception:
+                pass
+                
+            # Nếu thực sự do thiếu thẻ (Concept, Trống, hoặc Toast báo)
+            if is_concept_detected or is_squad_empty or is_no_players_toast or is_ineligible:
+                if supply_pack_name and not has_supplied_this_run:
+                    print("[INFO] Xác định thiếu thẻ bài. Đang thoát Builder để mở pack cứu tế...")
+                    try:
+                        page.keyboard.press("Escape")
+                        sleep_human_like(1.5, 2.5, page)
+                        back_btn = page.locator(".ut-navigation-bar button.ut-navigation-button-control--prev, .ut-navigation-bar button.back, button:has-text('◀')").first
+                        if back_btn.count() > 0 and back_btn.is_visible():
+                            back_btn.click()
+                            sleep_human_like(1.5, 2.5, page)
+                    except Exception:
+                        pass
+                        
+                    print(f"[INFO] Thử mở 1 pack tiếp tế '{supply_pack_name}'...")
+                    opened = open_single_supply_pack(page, config, paletools_js, supply_pack_name)
+                    if opened:
+                        has_supplied_this_run = True  # Đánh dấu đã thực hiện cứu tế 1 lần
+                        print(f"[OK] Đã mở thành công pack tiếp tế. Quay lại làm tiếp SBC '{sbc_name}'...")
+                        continue
+                        
+                # Nếu không có pack cứu tế hoặc đã cứu tế 1 lần rồi mà vẫn thiếu thẻ
+                print(f"[INFO] Tự động dừng làm SBC '{sbc_name}' do đã hết cầu thủ hợp lệ hoặc đã dùng hết lượt mở cứu tế.")
+                is_finished = False
+                break
+                
+            # Nếu không phải thiếu thẻ (lỗi lag mạng hoặc kẹt thông thường)
+            print(f"[WARNING] Lượt {sbc_count + 1} chưa được submit thành công (lag mạng hoặc lỗi kẹt).")
             consecutive_errors += 1
             if consecutive_errors >= 3:
-                print("[ERROR] Quá nhiều lỗi submit liên tiếp. Dừng bước SBC.")
+                print("[ERROR] Quá nhiều lỗi submit liên tiếp. Dừng bước SBC này.")
                 is_finished = False
                 break
             continue
+            
+        # 4. Submit thành công
+        sbc_count += 1
+        completed_sbcs_total += 1
+        consecutive_errors = 0
+        print(f"[OK] Đã hoàn thành lượt {sbc_count}.")
             
         if sbc_count < max_repeats:
             sleep_human_like(delays.get("after_submit_min", 1.5), delays.get("after_submit_max", 3.0), page)
@@ -697,7 +733,9 @@ def execute_sbc_step(page, config, paletools_js, sbc_name, max_repeats, complete
             print(f"[INFO] Tạm nghỉ để tránh bị ban tài khoản: {rest_time}s...")
             time.sleep(rest_time)
             
-    is_finished = True
+    # Chỉ gán is_finished = True nếu hoàn thành đủ max_repeats
+    if sbc_count >= max_repeats:
+        is_finished = True
     print(f"[SBC] Hoàn thành bước SBC: {sbc_name} ({sbc_count} lần thành công).")
     
     # Cuối cùng kiểm tra và dọn dẹp popup claim reward nếu còn sót

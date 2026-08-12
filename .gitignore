@@ -9,6 +9,7 @@
 
 # Personal configuration containing Telegram token (CRITICAL)
 .agents/skills/fc_sbc_bot/config.json
+.agents/skills/fc_sbc_bot/config backup.json
 
 # Debug screenshots and logs
 **/*.png

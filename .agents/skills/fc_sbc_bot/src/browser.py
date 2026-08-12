@@ -38,11 +38,18 @@ def init_browser(config):
                 user_agent="Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
             )
         except Exception as e:
-            print(f"[WARNING] Không thể chạy Chrome bằng profile cá nhân ({e}).")
-            print("[INFO] Đang chạy fallback bằng Chromium mặc định của Playwright...")
+            print(f"\n[WARNING] Không thể chạy Chrome bằng profile cá nhân ({e}).")
+            print("[IMPORTANT] GỢI Ý: Hãy kiểm tra và đảm bảo không có cửa sổ Chrome nào khác đang mở profile này.")
+            print("[INFO] Đang chạy fallback bằng Chromium với thư mục profile dự phòng (chrome_profile_fallback)...")
+            fallback_user_data_dir = os.path.join(BASE_DIR, "chrome_profile_fallback")
+            if not os.path.exists(fallback_user_data_dir):
+                try:
+                    os.makedirs(fallback_user_data_dir)
+                except Exception:
+                    pass
             try:
                 context = p.chromium.launch_persistent_context(
-                    user_data_dir=user_data_dir,
+                    user_data_dir=fallback_user_data_dir,
                     headless=config.get("headless", False),
                     args=[
                         "--disable-blink-features=AutomationControlled",
@@ -51,7 +58,7 @@ def init_browser(config):
                     viewport={"width": 1280, "height": 800}
                 )
             except Exception as e2:
-                print(f"[ERROR] Không thể khởi chạy trình duyệt: {e2}")
+                print(f"[ERROR] Không thể khởi chạy trình duyệt fallback: {e2}")
                 sys.exit(1)
         
         context.add_init_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")

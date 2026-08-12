@@ -6,9 +6,26 @@ import urllib.parse
 from src.config import BASE_DIR, PALETOOLS_PATH
 
 def load_paletools_js():
-    if os.path.exists(PALETOOLS_PATH):
-        print("[INFO] Found paletools.txt. Filtering clean source code...")
-        with open(PALETOOLS_PATH, "r", encoding="utf-8") as f:
+    import urllib.parse
+    from src.config import BASE_DIR
+    
+    # Danh sách các đường dẫn tìm kiếm khả dụng theo thứ tự ưu tiên
+    possible_paths = [
+        os.path.join(BASE_DIR, "resources", "paletools.txt"),
+        os.path.join(BASE_DIR, "resources", "paletools.js"),
+        os.path.join(BASE_DIR, "paletools.txt"),
+        os.path.join(BASE_DIR, "paletools.js")
+    ]
+    
+    found_path = None
+    for path in possible_paths:
+        if os.path.exists(path):
+            found_path = path
+            break
+            
+    if found_path:
+        print(f"[INFO] Đang nạp script PaleTools từ: {found_path}")
+        with open(found_path, "r", encoding="utf-8") as f:
             lines = f.readlines()
             
         content = ""
@@ -26,7 +43,9 @@ def load_paletools_js():
             
         return urllib.parse.unquote(content)
 
-    print(f"[ERROR] Could not find paletools.txt at {PALETOOLS_PATH}! Please prepare this file.")
+    print(f"[ERROR] Không tìm thấy file script PaleTools (yêu cầu một trong các file sau tồn tại: "
+          f"resources/paletools.txt, resources/paletools.js, paletools.txt, hoặc paletools.js). "
+          f"Vui lòng chuẩn bị file script này.")
     sys.exit(1)
 
 def ensure_paletools_injected(page, paletools_js):
@@ -87,30 +106,33 @@ def ensure_bot_overlay(page):
                 title.style.color = "#00ff88";
                 title.innerText = "FC SBC BOT:";
                 
+                let currentStatus = sessionStorage.getItem("bot_status") || "running";
+                
                 let statusText = document.createElement("span");
                 statusText.id = "bot-status-text";
-                statusText.innerText = "Đang chạy...";
-                statusText.style.color = "#00ff88";
+                statusText.innerText = currentStatus === "paused" ? "ĐÃ TẠM DỪNG" : "Đang chạy...";
+                statusText.style.color = currentStatus === "paused" ? "#ff3366" : "#00ff88";
                 
                 let btn = document.createElement("button");
                 btn.id = "bot-pause-btn";
-                btn.setAttribute("data-status", "running");
+                btn.setAttribute("data-status", currentStatus);
                 btn.style.pointerEvents = "auto";
-                btn.style.background = "#ff3366";
+                btn.style.background = currentStatus === "paused" ? "#00ff88" : "#ff3366";
                 btn.style.border = "none";
                 btn.style.borderRadius = "4px";
-                btn.style.color = "#fff";
+                btn.style.color = currentStatus === "paused" ? "#000" : "#fff";
                 btn.style.padding = "5px 12px";
                 btn.style.cursor = "pointer";
                 btn.style.fontWeight = "bold";
                 btn.style.transition = "0.2s";
-                btn.innerText = "TẠM DỪNG (Pause)";
+                btn.innerText = currentStatus === "paused" ? "TIẾP TỤC (Resume)" : "TẠM DỪNG (Pause)";
                 
                 btn.addEventListener("click", (e) => {
                     e.stopPropagation();
                     e.preventDefault();
                     if (btn.getAttribute("data-status") === "running") {
                         btn.setAttribute("data-status", "paused");
+                        sessionStorage.setItem("bot_status", "paused");
                         btn.innerText = "TIẾP TỤC (Resume)";
                         btn.style.background = "#00ff88";
                         btn.style.color = "#000";
@@ -118,6 +140,7 @@ def ensure_bot_overlay(page):
                         statusText.style.color = "#ff3366";
                     } else {
                         btn.setAttribute("data-status", "running");
+                        sessionStorage.setItem("bot_status", "running");
                         btn.innerText = "TẠM DỪNG (Pause)";
                         btn.style.background = "#ff3366";
                         btn.style.color = "#fff";
@@ -135,7 +158,6 @@ def ensure_bot_overlay(page):
         print(f"[WARNING] Không thể tạo bảng điều khiển Overlay: {e}")
 
 def check_keyboard_toggle():
-    """Kiểm tra phím p/P/Space trên Console mà không gây block (tương thích Windows & macOS/Linux)."""
     return False
 
 def check_pause(page):
@@ -148,7 +170,9 @@ def check_pause(page):
                 let statusText = document.getElementById('bot-status-text');
                 if (btn) {
                     let isRunning = btn.getAttribute('data-status') === 'running';
-                    btn.setAttribute('data-status', isRunning ? 'paused' : 'running');
+                    let nextStatus = isRunning ? 'paused' : 'running';
+                    btn.setAttribute('data-status', nextStatus);
+                    sessionStorage.setItem("bot_status", nextStatus);
                     btn.innerText = isRunning ? 'TIẾP TỤC (Resume)' : 'TẠM DỪNG (Pause)';
                     btn.style.background = isRunning ? '#00ff88' : '#ff3366';
                     btn.style.color = isRunning ? '#000' : '#fff';
@@ -167,6 +191,7 @@ def check_pause(page):
                         let isPaused = btn.getAttribute('data-status') === 'paused';
                         if (isPaused) {
                             btn.setAttribute('data-status', 'running');
+                            sessionStorage.setItem("bot_status", "running");
                             btn.innerText = 'TẠM DỪNG (Pause)';
                             btn.style.background = '#ff3366';
                             btn.style.color = '#fff';
@@ -177,8 +202,7 @@ def check_pause(page):
                 }""")
             
             is_paused = page.evaluate("""() => {
-                let btn = document.getElementById('bot-pause-btn');
-                return btn && btn.getAttribute('data-status') === 'paused';
+                return sessionStorage.getItem("bot_status") === 'paused';
             }""")
             
             if not is_paused:
@@ -187,7 +211,7 @@ def check_pause(page):
             if not printed:
                 print("\n" + "="*60)
                 print("[PAUSE] BOT ĐÃ ĐƯỢC TẠM DỪNG!")
-                print("-> Hãy click nút 'TIẾP TỤC (Resume)' trên Chrome hoặc nhấn 'p'/Space ở Console này để chạy tiếp.")
+                print("-> Hãy click nút 'TIẾP TỤC (Resume)' trên thanh điều khiển Chrome để chạy tiếp.")
                 print("="*60 + "\n")
                 printed = True
                 
@@ -203,6 +227,7 @@ def trigger_bot_pause(page, reason):
     print(f"\n[ALERT] KÍCH HOẠT TẠM DỪNG BOT TỰ ĐỘNG! Lý do: {reason}")
     try:
         page.evaluate("""() => {
+            sessionStorage.setItem("bot_status", "paused");
             let btn = document.getElementById('bot-pause-btn');
             let statusText = document.getElementById('bot-status-text');
             if (btn) {
