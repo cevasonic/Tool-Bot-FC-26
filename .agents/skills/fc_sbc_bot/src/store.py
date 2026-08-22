@@ -274,7 +274,7 @@ def open_single_supply_pack(page, config, paletools_js, pack_name):
         print(f"[ERROR] Lỗi khi mở pack tiếp tế {resolved_pack_name}: {e}")
         return False
 
-def execute_open_pack_step(page, config, paletools_js, pack_name, open_count=None, open_all=False):
+def execute_open_pack_step(page, config, paletools_js, pack_name, open_count=None, open_all=False, on_success_cb=None):
     # Tránh import vòng tròn
     from src.unassigned import handle_unassigned_items
 
@@ -383,6 +383,11 @@ def execute_open_pack_step(page, config, paletools_js, pack_name, open_count=Non
                     sleep_human_like(0.5, 1.2, page)
                     wait_for_click_shield(page)
                     opened_so_far += 1
+                    if on_success_cb:
+                        try:
+                            on_success_cb()
+                        except Exception as cb_err:
+                            print(f"[WARNING] Lỗi khi gọi callback lưu trạng thái mở pack: {cb_err}")
                 else:
                     print(f"[WARNING] Không tìm thấy nút xác nhận mở cho pack: {resolved_pack_name}")
                     is_finished = False

@@ -182,7 +182,7 @@ def get_sbc_repeats(tile_locator):
     print(f"[DEBUG_SBC]   Không xác định được số lượt repeatable từ UI. Trả về None.")
     return None
 
-def execute_sbc_step(page, config, paletools_js, sbc_name, max_repeats, completed_sbcs_total, supply_pack_name=None):
+def execute_sbc_step(page, config, paletools_js, sbc_name, max_repeats, completed_sbcs_total, supply_pack_name=None, on_success_cb=None):
     delays = config.get("delays", {})
     original_sbc_name = sbc_name
     print(f"\n[SBC] Bắt đầu tác vụ SBC: {sbc_name} (Lặp tối đa: {max_repeats if max_repeats != 999999 else 'Không giới hạn'})")
@@ -722,6 +722,11 @@ def execute_sbc_step(page, config, paletools_js, sbc_name, max_repeats, complete
         completed_sbcs_total += 1
         consecutive_errors = 0
         print(f"[OK] Đã hoàn thành lượt {sbc_count}.")
+        if on_success_cb:
+            try:
+                on_success_cb()
+            except Exception as cb_err:
+                print(f"[WARNING] Lỗi khi gọi callback lưu trạng thái SBC: {cb_err}")
             
         if sbc_count < max_repeats:
             sleep_human_like(delays.get("after_submit_min", 1.5), delays.get("after_submit_max", 3.0), page)

@@ -9,6 +9,7 @@ from src.utils import set_active_page, sleep_human_like, dismiss_modals
 from src.notification import alert_user_error
 from src.sbc import execute_sbc_step
 from src.store import execute_open_pack_step
+from src.state import load_daily_state, save_daily_state
 
 if hasattr(sys.stdout, 'reconfigure'):
     sys.stdout.reconfigure(encoding='utf-8')
@@ -78,17 +79,23 @@ def run():
             alert_user_error(page, config, "Lỗi nạp PaleTools.")
             sys.exit(1)
             
-        # Khởi tạo các biến lưu trữ trạng thái chạy workflow
-        context_vars = {}
-        completed_sbcs_total = 0
+        # Nạp trạng thái hàng ngày từ state.json
+        daily_state = load_daily_state()
+        
+        context_vars = daily_state.get("context_vars", {})
+        completed_sbcs_daily = daily_state.get("completed_sbcs", {})
+        opened_packs_daily = daily_state.get("opened_packs", {})
+        steps_finished = daily_state.get("steps_finished", {})
+        
+        # Đảm bảo tất cả các bước trong workflow hiện tại được khởi tạo trạng thái
+        for idx, step_cfg in enumerate(workflow):
+            if idx not in steps_finished:
+                steps_finished[idx] = False
+                
+        completed_sbcs_total = sum(completed_sbcs_daily.values())
         
         loop_count = 1
         max_loops = 3
-        
-        # Khởi tạo trạng thái hoàn thành của tất cả các bước trong workflow
-        steps_finished = {}
-        for idx, step_cfg in enumerate(workflow):
-            steps_finished[idx] = False
                 
         while loop_count <= max_loops:
             print(f"\n============================================================")
@@ -100,6 +107,8 @@ def run():
                 for idx, step_cfg in enumerate(workflow):
                     if step_cfg.get("type") == "open_pack":
                         steps_finished[idx] = False
+                daily_state["steps_finished"] = steps_finished
+                save_daily_state(daily_state)
             
             any_sbc_made_progress = False
             session_lost = False
@@ -127,21 +136,47 @@ def run():
                     if max_repeats == -1:
                         max_repeats = 999999
                         
+                    # Tính toán số lượt thực tế cần làm trong lượt chạy này dựa trên số lần đã làm trong ngày
+                    done_today = completed_sbcs_daily.get(sbc_name, 0)
+                    if max_repeats != 999999:
+                        max_repeats_adjusted = max_repeats - done_today
+                        if max_repeats_adjusted <= 0:
+                            print(f"\n[WORKFLOW] Bước {step_num} (SBC: {sbc_name}) đã làm đủ số lần trong ngày ({done_today}/{max_repeats}). Đánh dấu hoàn thành.")
+                            steps_finished[idx] = True
+                            daily_state["steps_finished"] = steps_finished
+                            save_daily_state(daily_state)
+                            continue
+                        print(f"[WORKFLOW] SBC '{sbc_name}' trong ngày đã làm {done_today} lần. Lượt này cần làm thêm {max_repeats_adjusted} lần (Mục tiêu: {max_repeats}).")
+                        max_repeats_run = max_repeats_adjusted
+                    else:
+                        max_repeats_run = max_repeats
+                        
+                    # Định nghĩa callback lưu trạng thái thời gian thực sau mỗi lượt SBC thành công
+                    def on_sbc_success_cb():
+                        nonlocal completed_sbcs_total, any_sbc_made_progress
+                        any_sbc_made_progress = True
+                        completed_sbcs_daily[sbc_name] = completed_sbcs_daily.get(sbc_name, 0) + 1
+                        completed_sbcs_total += 1
+                        if save_count_key:
+                            context_vars[save_count_key] = context_vars.get(save_count_key, 0) + 1
+                            print(f"[STATE CALLBACK] Cập nhật: {sbc_name} (+1), {save_count_key} ({context_vars[save_count_key]})")
+                        else:
+                            print(f"[STATE CALLBACK] Cập nhật: {sbc_name} (+1)")
+                        daily_state["completed_sbcs"] = completed_sbcs_daily
+                        daily_state["context_vars"] = context_vars
+                        save_daily_state(daily_state)
+                        
                     print(f"\n[WORKFLOW] --- THỰC HIỆN BƯỚC {step_num} (SBC: {sbc_name}) ---")
                     
-                    success_count, completed_sbcs_total, is_finished = execute_sbc_step(
-                        page, config, paletools_js, sbc_name, max_repeats, completed_sbcs_total, supply_pack_name=supply_pack_name
+                    success_count, completed_sbcs_total_run, is_finished = execute_sbc_step(
+                        page, config, paletools_js, sbc_name, max_repeats_run, completed_sbcs_total, supply_pack_name=supply_pack_name, on_success_cb=on_sbc_success_cb
                     )
                     
-                    if success_count > 0:
-                        any_sbc_made_progress = True
-                        
                     steps_finished[idx] = is_finished
                     
-                    save_count_key = step_cfg.get("save_count_key")
-                    if save_count_key:
-                        context_vars[save_count_key] = success_count
-                        print(f"[WORKFLOW] Đã lưu số lần SBC thành công của lượt này: {context_vars[save_count_key]} lần vào biến '{save_count_key}'")
+                    # Cập nhật và lưu lại trạng thái hoàn thành
+                    daily_state["steps_finished"] = steps_finished
+                    save_daily_state(daily_state)
                         
                 elif step_type == "open_pack":
                     # Nếu bước mở pack này đã hoàn thành ở vòng lặp trước, bỏ qua
@@ -166,6 +201,8 @@ def run():
                                         break
                             if sbc_source_finished:
                                 steps_finished[idx] = True
+                                daily_state["steps_finished"] = steps_finished
+                                save_daily_state(daily_state)
                             continue
                         print(f"\n[WORKFLOW] --- THỰC HIỆN BƯỚC {step_num} (OPEN_PACK: {pack_name}) ---")
                         print(f"[WORKFLOW] Lấy số lượng mở pack từ biến '{count_key}': {open_count} lần")
@@ -175,14 +212,21 @@ def run():
                     if not count_key and not open_all:
                         open_all = True
                         
+                    # Định nghĩa callback lưu trạng thái thời gian thực sau mỗi lượt mở pack thành công
+                    def on_pack_success_cb():
+                        opened_packs_daily[pack_name] = opened_packs_daily.get(pack_name, 0) + 1
+                        if count_key:
+                            context_vars[count_key] = max(0, context_vars.get(count_key, 0) - 1)
+                            print(f"[STATE CALLBACK] Đã mở 1 pack '{pack_name}'. Còn lại cần mở: {context_vars[count_key]}, Tổng đã mở hôm nay: {opened_packs_daily[pack_name]}")
+                        else:
+                            print(f"[STATE CALLBACK] Đã mở 1 pack '{pack_name}' (open_all), Tổng đã mở hôm nay: {opened_packs_daily[pack_name]}")
+                        daily_state["context_vars"] = context_vars
+                        daily_state["opened_packs"] = opened_packs_daily
+                        save_daily_state(daily_state)
+                        
                     opened_count, is_finished = execute_open_pack_step(
-                        page, config, paletools_js, pack_name, open_count=open_count, open_all=open_all
+                        page, config, paletools_js, pack_name, open_count=open_count, open_all=open_all, on_success_cb=on_pack_success_cb
                     )
-                    
-                    # Chỉ cập nhật và trừ bớt số lượng pack chưa mở nếu mở thành công ít nhất 1 pack
-                    if count_key and opened_count > 0:
-                        context_vars[count_key] = max(0, context_vars[count_key] - opened_count)
-                        print(f"[WORKFLOW] Đã mở thành công {opened_count} pack. Số lượng pack còn lại cần mở trong biến '{count_key}': {context_vars[count_key]}")
                     
                     # Đánh dấu bước là hoàn thành nếu hàm execute_open_pack_step báo đã xong (hoặc đã mở hết pack)
                     if is_finished:
@@ -198,6 +242,10 @@ def run():
                                 steps_finished[idx] = True
                         else:
                             steps_finished[idx] = True
+                            
+                    # Cập nhật và lưu lại trạng thái hoàn thành
+                    daily_state["steps_finished"] = steps_finished
+                    save_daily_state(daily_state)
                             
                 else:
                     print(f"[WARNING] Loại bước '{step_type}' không được hỗ trợ. Bỏ qua.")
