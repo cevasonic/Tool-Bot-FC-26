@@ -2,6 +2,9 @@
 
 Quy định các hành vi, ràng buộc toán học và thuật toán giải SBC nhằm đảm bảo độ chính xác tối đa, ưu tiên tuyệt đối chiến thuật High-Low và bảo vệ tài nguyên thẻ cận trung của người dùng.
 
+> [!IMPORTANT]
+> **TẬP TRUNG CHÍNH:** Solver chỉ tập trung duy nhất vào mục tiêu **Rating trung bình** và **Số lượng cầu thủ (size)**. Bỏ qua hoàn toàn các yêu cầu phụ khác (Rare, TOTW, TOTS) để tăng tối đa tính khả thi và độ linh hoạt của tổ hợp High-Low.
+
 ---
 
 ## 1. Phân tách và Lựa chọn Bộ giải (Solver Selection)

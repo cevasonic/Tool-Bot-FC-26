@@ -290,8 +290,9 @@ def solve_sbc_heuristic(valid_players: list, min_rating: int, min_rare: int,
 
 def solve_sbc(players: list, requirements: dict, config: dict):
     min_rating    = requirements.get("min_rating", 83)
-    min_rare      = requirements.get("min_rare", 0)
-    min_totw_tots = requirements.get("min_totw_tots", 0)
+    # Chỉ tập trung vào rating và size, bỏ qua các yêu cầu phụ khác (Rare, TOTW, TOTS) theo yêu cầu của người dùng
+    min_rare      = 0
+    min_totw_tots = 0
     sbc_size      = requirements.get("size", 11)
 
     min_use_rating = max(config.get("min_rating_to_use", 80), 80)
