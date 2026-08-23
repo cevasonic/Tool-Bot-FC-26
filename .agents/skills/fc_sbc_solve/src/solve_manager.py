@@ -305,6 +305,16 @@ def monitor_sbc_solver(page, config: dict):
             # ── 6. Chạy Solver ────────────────────────────────────────────────
             print("[SOLVER MANAGER] Đang tính toán đội hình tối ưu (MILP)...")
             update_button_status(page, "⏳ SOLVING...", "#ffd43b")
+            
+            # Dump debug inputs
+            try:
+                debug_path = os.path.join(SOLVE_DIR, "logs", "debug_run.json")
+                with open(debug_path, "w", encoding="utf-8") as df:
+                    json.dump({"players": players, "requirements": requirements, "config": sbc_config}, df, ensure_ascii=False, indent=2)
+                print(f"[SOLVER MANAGER] Đã ghi debug inputs vào: {debug_path}")
+            except Exception as df_err:
+                print(f"[SOLVER MANAGER WARNING] Không thể ghi debug inputs: {df_err}")
+
             result = solve_sbc(players, requirements, sbc_config)
 
             if not result:

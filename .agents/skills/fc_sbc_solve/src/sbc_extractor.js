@@ -142,6 +142,18 @@ window.sbcSolveExtractor = {
             || item.assetId
             || 0;
 
+        let isEvolution = false;
+        try {
+            isEvolution = typeof item.isEvolution === 'function' ? item.isEvolution() : (item.isEvolution || false);
+        } catch(e) {}
+
+        let isFavorite = false;
+        try {
+            isFavorite = typeof item.isFavorite === 'function' ? item.isFavorite() : (item.favorite || false);
+        } catch(e) {}
+
+        let activeSquad = item.activeSquad === true;
+
         return {
             id: String(item.id),
             definitionId: Number(defId),
@@ -156,7 +168,10 @@ window.sbcSolveExtractor = {
             sbc_storage: source === 'storage',
             market_price: item._itemPriceData?.buyNowPrice
                 || item.itemPriceData?.buyNowPrice
-                || 500
+                || 500,
+            active_squad: activeSquad,
+            favorite: isFavorite,
+            evolution: isEvolution
         };
     },
 

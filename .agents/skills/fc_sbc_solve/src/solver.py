@@ -160,6 +160,9 @@ def solve_sbc_milp(valid_players: list, min_rating: int, min_rare: int,
     if n < sbc_size:
         return None
 
+    best_solution = None
+    best_cost = float('inf')
+
     for bonus in range(4):
         target_sum = (min_rating + bonus) * sbc_size
 
@@ -177,8 +180,13 @@ def solve_sbc_milp(valid_players: list, min_rating: int, min_rare: int,
                 for p in valid_players
             ]
             prob += pulp.lpSum(x[i] * contributions[i] for i in range(n)) >= target_sum
-            # Chỉ áp dụng giới hạn trên nghiêm ngặt đối với SBC rating cao để tránh lãng phí thẻ siêu cao
-            prob += pulp.lpSum(x[i] * contributions[i] for i in range(n)) <= (min_rating + 2.5) * sbc_size
+            # Chỉ áp dụng giới hạn trên nghiêm ngặt đối với SBC rating cao để tránh lãng phí thẻ siêu cao.
+            # Đối với SBC >= 90: giới hạn chặt chẽ (1.5) để tránh rating vọt lên quá cao gây lãng phí.
+            # Đối với SBC 87-88: giới hạn động (2.5 + bonus) để tránh bị vô nghiệm khi thiếu thẻ thấp.
+            if min_rating >= 90:
+                prob += pulp.lpSum(x[i] * contributions[i] for i in range(n)) <= (min_rating + 1.5) * sbc_size
+            else:
+                prob += pulp.lpSum(x[i] * contributions[i] for i in range(n)) <= (min_rating + 2.5 + bonus) * sbc_size
         else:
             # SBC rating thấp: Không cần giới hạn trên chặt chẽ và dùng công thức đóng góp đơn giản
             contributions = [p['rating'] for p in valid_players]
@@ -206,9 +214,12 @@ def solve_sbc_milp(valid_players: list, min_rating: int, min_rare: int,
 
         actual_rating = calculate_sbc_rating([p['rating'] for p in selected])
         if actual_rating >= min_rating:
-            return selected
+            cost = sum(p['cost'] for p in selected)
+            if cost < best_cost:
+                best_cost = cost
+                best_solution = selected
 
-    return None
+    return best_solution
 
 
 def solve_sbc_heuristic(valid_players: list, min_rating: int, min_rare: int,
@@ -295,10 +306,54 @@ def solve_sbc(players: list, requirements: dict, config: dict):
     min_totw_tots = 0
     sbc_size      = requirements.get("size", 11)
 
-    min_use_rating = max(config.get("min_rating_to_use", 80), 80)
-    max_use_rating = config.get("max_rating_to_use", 88)
     prioritize_sbc_storage = config.get("prioritize_sbc_storage", True)
-    blacklist_ids  = set(str(bid) for bid in config.get("blacklist_ids", []))
+    prioritize_untradeable = config.get("prioritize_untradeable", True)
+
+    # Xác định giới hạn trần rating từ thẻ cao nhất trong SBC Storage
+    storage_ratings = [p.get("rating", 0) for p in players if p.get("sbc_storage", False)]
+    max_storage_rating = max(storage_ratings) if storage_ratings else 0
+
+    if min_rating >= 90:
+        min_use_rating = max(config.get("min_rating_to_use", 80), 80)
+        if max_storage_rating > 0:
+            max_use_rating = max(max_storage_rating, min_rating)
+        else:
+            max_use_rating = max(config.get("max_rating_to_use", 90), min_rating)
+        # Đối với SBC >= 90: coi toàn bộ thẻ < min_rating là cận dưới để làm thẻ đệm gánh team
+        low_min = 80
+        low_max = min_rating - 1
+        mid_min = min_rating
+    else:
+        min_use_rating = max(config.get("min_rating_to_use", 80), 80)
+        if max_storage_rating > 0:
+            if max_storage_rating >= min_rating:
+                # Cấu hình mức max rating chính là cầu thủ có rating cao nhất trong sbc storage
+                max_use_rating = max_storage_rating
+            else:
+                # Nếu thẻ Storage quá thấp so với yêu cầu SBC, ta phải lấy thẻ từ Club để giải được
+                if min_rating >= 87:
+                    max_use_rating = 99
+                else:
+                    max_use_rating = max(config.get("max_rating_to_use", 88), min_rating + 1)
+        else:
+            # Nếu Storage trống, dùng cấu hình config
+            max_use_rating = config.get("max_rating_to_use", 88)
+            if min_rating >= 87:
+                max_use_rating = max(max_use_rating, 99)
+
+        if min_rating <= 88:
+            low_min, low_max = 81, 83
+            mid_min = 84
+        else:
+            low_min, low_max = 84, 86
+            mid_min = 87
+
+    # Đọc cấu hình bảo vệ thẻ
+    protected_config = config.get("protected_cards", {})
+    protect_active = protected_config.get("active_squad", True)
+    protect_favorites = protected_config.get("favorites", True)
+    protect_evolutions = protected_config.get("evolutions", True)
+    blacklist_ids = set(str(bid) for bid in protected_config.get("blacklist_ids", []))
 
     print(f"[SOLVER] Mục tiêu: rating≥{min_rating}, rare≥{min_rare}, "
           f"totw≥{min_totw_tots}, size={sbc_size}")
@@ -311,10 +366,16 @@ def solve_sbc(players: list, requirements: dict, config: dict):
         pid = str(p.get("id", ""))
         if pid in blacklist_ids:
             continue
+        if protect_active and p.get("active_squad", False):
+            continue
+        if protect_favorites and p.get("favorite", False):
+            continue
+        if protect_evolutions and p.get("evolution", False):
+            continue
 
         r = p.get("rating", 0)
-        # Nếu SBC rating >= 89, bắt buộc chỉ dùng cầu thủ từ 84 trở lên (không được dùng thẻ 80-83)
-        if min_rating >= 89 and r < 84:
+        # Nếu SBC rating == 89, bắt buộc chỉ dùng cầu thủ từ 84 trở lên (không được dùng thẻ 80-83)
+        if min_rating == 89 and r < 84:
             continue
         if r < 80:
             continue
@@ -326,6 +387,7 @@ def solve_sbc(players: list, requirements: dict, config: dict):
             valid_players.append(p)
             continue
 
+        # Thẻ thường: phải nằm trong khoảng rating được phép dùng
         if min_use_rating <= r <= max_use_rating:
             valid_players.append(p)
 
@@ -334,16 +396,6 @@ def solve_sbc(players: list, requirements: dict, config: dict):
         return None
 
     # 2. Tính chi phí ảo (Virtual Cost)
-    prioritize_untradeable = config.get("prioritize_untradeable", True)
-    prioritize_sbc_storage = config.get("prioritize_sbc_storage", True)
-
-    # Xác định khoảng rating thấp cận dưới (low-end) động dựa trên yêu cầu rating tối thiểu của SBC
-    if min_rating <= 88:
-        low_min, low_max = 81, 83
-        mid_min = 84
-    else:
-        low_min, low_max = 84, 86
-        mid_min = 87
 
     for p in valid_players:
         is_storage = p.get("sbc_storage", False)
@@ -351,30 +403,34 @@ def solve_sbc(players: list, requirements: dict, config: dict):
         r = p.get("rating", 80)
         market_price = max(p.get("market_price", 1000), 400)
 
-        # Chi phí ảo để kích thích chiến thuật High-Low (dùng cận trên r >= min_rating & cận dưới động, bảo tồn cận trung)
+        # A. Cận dưới động và dưới cận dưới động (r <= low_max): Không phân biệt tradeable/untradeable để tận dụng thẻ giá rẻ
+        if r <= low_max:
+            if is_storage and prioritize_sbc_storage:
+                if low_min <= r <= low_max:
+                    multiplier = 1.0 if min_rating >= 90 else 3.0
+                    p["cost"] = 5.0 + (r - low_min) * multiplier
+                else: # r < low_min
+                    p["cost"] = 200.0 + (low_min - r) * 5.0
+            else: # Club (cả tradeable và untradeable)
+                if low_min <= r <= low_max:
+                    multiplier = 1.5 if min_rating >= 90 else 5.0
+                    p["cost"] = 15.0 + (r - low_min) * multiplier
+                else: # r < low_min
+                    p["cost"] = 350.0 + (low_min - r) * 5.0
+            continue
+
+        # B. Các thẻ từ mid_min trở lên (r > low_max): Có phân biệt tradeable/untradeable để bảo vệ thẻ đắt
         if is_storage and prioritize_sbc_storage:
             if r >= min_rating:
                 # Cận trên Storage: Rất rẻ, tăng dần từ min_rating để ưu tiên chọn thẻ thấp hơn trước (tránh lãng phí thẻ siêu cao)
                 p["cost"] = 10.0 + (r - min_rating) * 2.0
-            elif low_min <= r <= low_max:
-                # Cận dưới Storage động: Cực kỳ rẻ để phối hợp
-                p["cost"] = 5.0 + (r - low_min) * 3.0
-            elif r < low_min:
-                # Dưới cận dưới Storage: Đắt vừa phải để tránh ưu tiên
-                p["cost"] = 200.0 + (low_min - r) * 5.0
             else:
-                # Cận trung Storage (mid_min đến 92): Rất đắt để bảo tồn thẻ
-                p["cost"] = 250.0 + (88 - abs(r - 88)) * 10.0
+                # Cận trung Storage (mid_min đến 92): Rất đắt để bảo tồn thẻ (lên tới 250 điểm)
+                p["cost"] = 250.0 - abs(r - 88) * 10.0
         elif (is_untradeable or is_storage) and prioritize_untradeable:
             if r >= min_rating:
                 # Cận trên Club Untradeable: Rẻ để sử dụng gánh team nếu thiếu Storage
                 p["cost"] = 50.0 + (r - min_rating) * 5.0
-            elif low_min <= r <= low_max:
-                # Cận dưới Club động: Rất rẻ để dùng bù phần thiếu
-                p["cost"] = 15.0 + (r - low_min) * 5.0
-            elif r < low_min:
-                # Dưới cận dưới Club: Đắt vừa phải để tránh ưu tiên
-                p["cost"] = 350.0 + (low_min - r) * 5.0
             else:
                 # Cận trung Club (mid_min đến min_rating - 1): Cực kỳ đắt để tránh sử dụng
                 p["cost"] = 400.0 + (r - mid_min) * 20.0
@@ -528,7 +584,7 @@ if __name__ == "__main__":
                     "totw": any(k in rarity for k in ["totw", "in form"]),
                     "tots": "tots" in rarity,
                     "untradeable": row.get("Untradeable", "false").lower() == "true",
-                    "sbc_storage": row.get("Location", "").lower() == "storage",
+                    "sbc_storage": row.get("Location", "").lower() in ["storage", "sbcstorage"],
                     "market_price": discard_val
                 })
 
