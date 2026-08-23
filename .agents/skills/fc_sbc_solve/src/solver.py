@@ -435,7 +435,7 @@ def solve_sbc(players: list, requirements: dict, config: dict):
             players_by_rating[r].sort(key=lambda p: p["cost"])
 
         available_ratings = sorted(players_by_rating.keys())
-        search_ratings = [r for r in available_ratings if (min_rating - 4) <= r <= (min_rating + 5)]
+        search_ratings = [r for r in available_ratings if (min_rating - 8) <= r <= (min_rating + 5)]
         if not search_ratings:
             search_ratings = available_ratings
 
