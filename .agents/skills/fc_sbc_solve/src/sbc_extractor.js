@@ -15,6 +15,7 @@
  */
 
 window.sbcSolveExtractor = {
+    rawClubItems: [],
 
     // =========================================================================
     // PHẦN 1: TIỆN ÍCH TÌM VIEWCONTROLLER
@@ -115,9 +116,14 @@ window.sbcSolveExtractor = {
         // Rating: FC26 dùng _rating
         let rating = item._rating || item.rating || 0;
 
-        // Rarity: FC26 dùng _rareflag
+        // Rarity: FC26 dùng _rareflag hoặc function isRare()
         let rareflag = item._rareflag || item.rareflag || 0;
-        let isRare = rareflag > 1 || rareflag === 1;
+        let isRare = false;
+        if (typeof item.isRare === 'function') {
+            isRare = item.isRare();
+        } else {
+            isRare = rareflag > 1 || rareflag === 1;
+        }
         // TOTW: rareflag 12 (IF), 22, 53, 55, 56...
         let isTotw = [12, 22, 53, 55, 56, 63, 66, 71, 72].includes(rareflag);
         // TOTS: rareflag 41, 42
@@ -158,7 +164,7 @@ window.sbcSolveExtractor = {
      * [FC26 API] Đọc cầu thủ từ cache hiện tại trong repositories.
      * Dùng repositories.Item.club.items.values() (FC26 dùng Map, không phải ._items)
      */
-    gatherPlayersFromCache: function() {
+    gatherPlayersFromCache: function(clubPlayersFromServer) {
         const self = this;
         let allMap = new Map();
 
@@ -196,31 +202,38 @@ window.sbcSolveExtractor = {
             }
         } catch(e) {}
 
-        // --- Club Players (FC26: repositories.Item.club.items là Map/Collection) ---
-        try {
-            // FC26 API mới: repositories.Item.club.items.values()
-            let clubItemsRepo = repositories.Item.club ? repositories.Item.club.items : null;
-            if (clubItemsRepo && typeof clubItemsRepo.values === 'function') {
-                Array.from(clubItemsRepo.values()).forEach(item => {
-                    if (item && (item.type === 'player' || (item.isPlayer && item.isPlayer()))) {
-                        let p = self.mapPlayerItem(item, 'club');
-                        if (p && p.rating >= 70 && !allMap.has(p.id)) allMap.set(p.id, p);
-                    }
-                });
-            } else {
-                // Fallback: API cũ getClub()._items
-                let clubObj = repositories.Item.getClub ? repositories.Item.getClub() : null;
-                if (clubObj && clubObj._items) {
-                    let ci = Array.isArray(clubObj._items) ? clubObj._items : Object.values(clubObj._items);
-                    ci.forEach(item => {
+        // --- Club Players ---
+        if (Array.isArray(clubPlayersFromServer) && clubPlayersFromServer.length > 0) {
+            clubPlayersFromServer.forEach(p => {
+                if (p && !allMap.has(p.id)) {
+                    allMap.set(p.id, p);
+                }
+            });
+        } else {
+            try {
+                // Fallback nếu không có clubPlayersFromServer: đọc từ cache hiện tại
+                let clubItemsRepo = repositories.Item.club ? repositories.Item.club.items : null;
+                if (clubItemsRepo && typeof clubItemsRepo.values === 'function') {
+                    Array.from(clubItemsRepo.values()).forEach(item => {
                         if (item && (item.type === 'player' || (item.isPlayer && item.isPlayer()))) {
                             let p = self.mapPlayerItem(item, 'club');
                             if (p && p.rating >= 70 && !allMap.has(p.id)) allMap.set(p.id, p);
                         }
                     });
+                } else {
+                    let clubObj = repositories.Item.getClub ? repositories.Item.getClub() : null;
+                    if (clubObj && clubObj._items) {
+                        let ci = Array.isArray(clubObj._items) ? clubObj._items : Object.values(clubObj._items);
+                        ci.forEach(item => {
+                            if (item && (item.type === 'player' || (item.isPlayer && item.isPlayer()))) {
+                                let p = self.mapPlayerItem(item, 'club');
+                                if (p && p.rating >= 70 && !allMap.has(p.id)) allMap.set(p.id, p);
+                            }
+                        });
+                    }
                 }
-            }
-        } catch(e) { console.warn('[SOLVER JS] Club read error:', e.message); }
+            } catch(e) { console.warn('[SOLVER JS] Club read error:', e.message); }
+        }
 
         return Array.from(allMap.values());
     },
@@ -259,25 +272,26 @@ window.sbcSolveExtractor = {
             // Kiểm tra xem services.Club.search có tồn tại không
             if (typeof services === 'undefined' || !services.Club || typeof services.Club.search !== 'function') {
                 console.warn('[SOLVER JS] services.Club.search không khả dụng.');
-                resolve(0);
+                resolve([]);
                 return;
             }
 
             if (typeof UTSearchCriteriaDTO === 'undefined') {
                 console.warn('[SOLVER JS] UTSearchCriteriaDTO không tồn tại.');
-                resolve(0);
+                resolve([]);
                 return;
             }
 
-            let totalLoaded = 0;
+            self.rawClubItems = [];
+            let accumulated = [];
             let offset = 0;
             const PAGE_SIZE = 90; // EA giới hạn tối đa 90/request
             let maxPages = 20;    // Giới hạn an toàn: tối đa 20 trang = 1800 cầu thủ
 
             const loadPage = () => {
                 if (maxPages-- <= 0) {
-                    console.log(`[SOLVER JS] Đã load ${totalLoaded} cầu thủ (đạt giới hạn trang).`);
-                    resolve(totalLoaded);
+                    console.log(`[SOLVER JS] Đã load ${accumulated.length} cầu thủ (đạt giới hạn trang).`);
+                    resolve(accumulated);
                     return;
                 }
 
@@ -293,34 +307,43 @@ window.sbcSolveExtractor = {
                 criteria.type = SearchType && SearchType.PLAYER ? SearchType.PLAYER : 'player';
                 criteria.count = PAGE_SIZE;
                 criteria.offset = offset;
-                criteria.cacheable = false; // Quan trọng: bypass cache
+                criteria.cacheable = false; // bypass cache
 
                 try {
                     let obs = services.Club.search(criteria);
                     obs.observe(self, function(observer, response) {
                         if (response && response.success && response.response && response.response.items) {
                             let items = response.response.items;
-                            let playerCount = items.filter(
-                                item => item && (item.type === 'player' || (item.isPlayer && item.isPlayer()))
-                            ).length;
-                            totalLoaded += playerCount;
-                            console.log(`[SOLVER JS] Trang ${Math.floor(offset/PAGE_SIZE)+1}: ${items.length} items (${playerCount} cầu thủ), tổng=${totalLoaded}`);
+                            let pagePlayersCount = 0;
+                            items.forEach(item => {
+                                if (item && (item.type === 'player' || (item.isPlayer && item.isPlayer()))) {
+                                    // Lưu lại raw item instance để dùng khi điền đội hình
+                                    self.rawClubItems.push(item);
+
+                                    let p = self.mapPlayerItem(item, 'club');
+                                    if (p && p.rating >= 70) {
+                                        accumulated.push(p);
+                                        pagePlayersCount++;
+                                    }
+                                }
+                            });
+                            console.log(`[SOLVER JS] Trang ${Math.floor(offset/PAGE_SIZE)+1}: ${items.length} items (${pagePlayersCount} cầu thủ), tổng tích lũy=${accumulated.length}`);
 
                             if (items.length < PAGE_SIZE || response.response.retrievedAll) {
                                 // Đã hết dữ liệu
-                                resolve(totalLoaded);
+                                resolve(accumulated);
                             } else {
                                 offset += PAGE_SIZE;
                                 setTimeout(loadPage, 300); // Chờ 300ms giữa các trang
                             }
                         } else {
                             console.warn('[SOLVER JS] Trang không trả về dữ liệu hợp lệ.');
-                            resolve(totalLoaded);
+                            resolve(accumulated);
                         }
                     });
                 } catch(searchErr) {
                     console.warn('[SOLVER JS] Lỗi gọi services.Club.search:', searchErr.message);
-                    resolve(totalLoaded);
+                    resolve(accumulated);
                 }
             };
 
@@ -374,7 +397,7 @@ window.sbcSolveExtractor = {
      *   6. resolve() với dữ liệu thu được
      */
     extractSbcAndPlayers: function() {
-        return new Promise((resolve) => {
+        return new Promise(async (resolve) => {
             const self = this;
             let result = { sbc_challenge: null, players: [], error: null };
 
@@ -400,20 +423,154 @@ window.sbcSolveExtractor = {
                     throw new Error('Không tìm thấy đối tượng SBC Challenge trên ViewController.');
                 }
 
+                // ── ĐỌC YÊU CẦU SBC (FALLBACK CHAIN CHẶT CHẼ) ──
+                let rawReqs = [];
+                let candidates = [];
+                if (challenge.requirements && challenge.requirements.length > 0) {
+                    candidates = challenge.requirements;
+                } else if (challenge.eligibilityRequirements && challenge.eligibilityRequirements.length > 0) {
+                    candidates = challenge.eligibilityRequirements;
+                } else if (typeof challenge.getEligibilityRequirements === 'function') {
+                    try { candidates = challenge.getEligibilityRequirements() || []; } catch(e) {}
+                } else if (challenge._requirements && challenge._requirements.length > 0) {
+                    candidates = challenge._requirements;
+                } else if (challenge._eligibilityRequirements && challenge._eligibilityRequirements.length > 0) {
+                    candidates = challenge._eligibilityRequirements;
+                }
+
+                // Lọc bỏ các requirement rỗng/vô nghĩa (value <= 0 và không có text mô tả)
+                if (candidates && candidates.length > 0) {
+                    rawReqs = Array.from(candidates).filter(r => {
+                        if (!r) return false;
+                        let val = r.value || 0;
+                        let desc = '';
+                        if (typeof r.getRequirementText === 'function') {
+                            try { desc = r.getRequirementText() || ''; } catch(e) {}
+                        }
+                        if (!desc) {
+                            desc = r.description || '';
+                        }
+                        desc = String(desc).trim();
+                        return val > 0 || desc.length > 0;
+                    });
+                }
+
+                // Tầng 2: Nếu API trống, tự động click mở popup "Requirements" và cào từ giao diện DOM
+                if (!rawReqs || rawReqs.length === 0) {
+                    console.log('[SOLVER JS] API trống → Thử cào điều kiện từ giao diện DOM...');
+                    try {
+                        let reqBtn = Array.from(document.querySelectorAll('div, button, span, p')).find(el => {
+                            let txt = (el.innerText || el.textContent || '').trim();
+                            return txt.startsWith('Requirements') && el.offsetWidth > 0;
+                        });
+
+                        if (reqBtn) {
+                            console.log('[SOLVER JS] Click mở tab Requirements...');
+                            try { reqBtn.click(); } catch(cErr) {}
+                            await new Promise(r => setTimeout(r, 150)); // Chờ popup render
+                        }
+
+                        // Tìm popup "Challenge Requirements" bằng cách so khớp tiêu đề/nội dung
+                        let popup = Array.from(document.querySelectorAll('div, section')).find(el => {
+                            let html = el.innerHTML || '';
+                            return html.includes('Challenge Requirements') && el.offsetWidth > 0;
+                        });
+
+                        if (popup) {
+                            let domReqs = [];
+                            let items = popup.querySelectorAll('li, div, p, span');
+                            items.forEach(el => {
+                                let text = (el.innerText || el.textContent || '').trim();
+                                if (text && text.length > 5 && text.length < 100) {
+                                    // Phân tích Rating
+                                    let ratingMatch = text.match(/(?:rating|đánh\s*giá|valoración)\D*(\d+)/i);
+                                    if (ratingMatch) {
+                                        let val = parseInt(ratingMatch[1]);
+                                        if (!domReqs.some(r => r.type === 'teamrating' && r.value === val)) {
+                                            domReqs.push({
+                                                type: 'teamrating',
+                                                value: val,
+                                                getRequirementText: () => text,
+                                                description: text
+                                            });
+                                        }
+                                    }
+                                    // Phân tích Rare
+                                    let rareMatch = text.match(/(?:rare|hiếm|únicos)\D*(\d+)/i);
+                                    if (rareMatch) {
+                                        let val = parseInt(rareMatch[1]);
+                                        if (!domReqs.some(r => r.type === 'rare' && r.value === val)) {
+                                            domReqs.push({
+                                                type: 'rare',
+                                                value: val,
+                                                getRequirementText: () => text,
+                                                description: text
+                                            });
+                                        }
+                                    }
+                                    // Phân tích TOTW/TOTS
+                                    let specialMatch = text.match(/(?:totw|tots|week|tuần|especial|in-form|special)\D*(\d+)/i);
+                                    if (specialMatch) {
+                                        let val = parseInt(specialMatch[1]);
+                                        if (!domReqs.some(r => r.type === 'totw' && r.value === val)) {
+                                            domReqs.push({
+                                                type: 'totw',
+                                                value: val,
+                                                getRequirementText: () => text,
+                                                description: text
+                                            });
+                                        }
+                                    }
+                                }
+                            });
+
+                            if (domReqs.length > 0) {
+                                console.log('[SOLVER JS] Đã cào được các yêu cầu từ DOM:', domReqs);
+                                rawReqs = domReqs;
+                            }
+                        }
+
+                        // Click đóng lại popup (để trả lại giao diện nguyên bản)
+                        if (reqBtn) {
+                            try { reqBtn.click(); } catch(cErr) {}
+                        }
+                    } catch (domErr) {
+                        console.warn('[SOLVER JS] Lỗi khi cào DOM requirements:', domErr.message);
+                    }
+                }
+
+                // Tầng 3: Nếu vẫn trống, fallback phân tích từ tên Challenge (chỉ khi có chữ -Rated)
+                if ((!rawReqs || rawReqs.length === 0) && challenge.name) {
+                    let match = challenge.name.match(/(\d+)-[rR]ated/);
+                    if (!match) {
+                        match = challenge.name.match(/(\d+)\s+[rR]ated/);
+                    }
+                    if (match) {
+                        let ratingVal = parseInt(match[1]);
+                        console.log('[SOLVER JS] Tự động parse rating từ tên challenge:', ratingVal);
+                        rawReqs = [{
+                            type: 'teamrating',
+                            value: ratingVal,
+                            getRequirementText: () => `Min. Team Rating: ${ratingVal}`,
+                            description: `Min. Team Rating: ${ratingVal}`
+                        }];
+                    }
+                }
+
+                let mappedRequirements = rawReqs ? rawReqs.map(r => ({
+                    type: r.type != null ? String(r.type) : '',
+                    value: r.value != null ? r.value : 0,
+                    desc: (typeof r.getRequirementText === 'function')
+                        ? r.getRequirementText()
+                        : (r.description || '')
+                })) : [];
+
                 // Đọc thông tin SBC
                 result.sbc_challenge = {
                     name: challenge.name || 'SBC Challenge',
                     id: challenge.id ? String(challenge.id) : '',
                     size: challenge.squadSize || 11,
-                    requirements: challenge.requirements
-                        ? challenge.requirements.map(r => ({
-                            type: r.type != null ? String(r.type) : '',
-                            value: r.value != null ? r.value : 0,
-                            desc: (typeof r.getRequirementText === 'function')
-                                ? r.getRequirementText()
-                                : (r.description || '')
-                          }))
-                        : []
+                    requirements: mappedRequirements
                 };
 
                 console.log('[SOLVER JS] SBC Challenge:', result.sbc_challenge.name,
@@ -429,11 +586,11 @@ window.sbcSolveExtractor = {
                 Promise.all([
                     self.loadClubPlayersFromServer(),
                     self.loadStoragePlayers()
-                ]).then(([clubCount, storageCount]) => {
-                    console.log(`[SOLVER JS] Tải xong: Club=${clubCount}, Storage=${storageCount}`);
+                ]).then(([clubPlayers, storageCount]) => {
+                    console.log(`[SOLVER JS] Tải xong: Club=${clubPlayers.length}, Storage=${storageCount}`);
 
-                    // Thu thập và lọc cầu thủ từ cache
-                    let allPlayers = self.gatherPlayersFromCache();
+                    // Thu thập và lọc cầu thủ từ cache và kết quả server
+                    let allPlayers = self.gatherPlayersFromCache(clubPlayers);
                     
                     // Loại bỏ thẻ Loan (không được dùng trong SBC thông thường) và chỉ lấy cầu thủ có rating >= 70
                     result.players = allPlayers.filter(p => p && !p.loan && p.rating >= 70);
@@ -546,6 +703,18 @@ window.sbcSolveExtractor = {
                             }
                         });
                     }
+                }
+            } catch(e) {}
+
+            // 4. Các raw items đã được lưu từ server search
+            try {
+                let savedItems = window.sbcSolveExtractor.rawClubItems;
+                if (Array.isArray(savedItems)) {
+                    savedItems.forEach(item => {
+                        if (item && item.id != null && !playerMap.has(String(item.id))) {
+                            playerMap.set(String(item.id), item);
+                        }
+                    });
                 }
             } catch(e) {}
 

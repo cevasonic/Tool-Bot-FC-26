@@ -20,6 +20,7 @@ CÔNG THỨC RATING SBC CỦA EA:
 
 import math
 import json
+import os
 
 
 # =============================================================================
@@ -40,106 +41,183 @@ def calculate_sbc_rating(ratings: list) -> int:
     return math.floor(avg + excess_sum / size)
 
 
-# =============================================================================
-# PHẦN 2: MILP SOLVER (Primary)
-# =============================================================================
+def solve_using_combinations(valid_players, target_rating, min_rare, min_totw_tots, sbc_size):
+    # 1. Load rating_combinations.json
+    resources_dir = os.path.join(os.path.dirname(__file__), "..", "resources")
+    json_path = os.path.join(resources_dir, "rating_combinations.json")
+    if not os.path.exists(json_path):
+        print(f"[SOLVER] Không tìm thấy tệp combinations: {json_path}")
+        return None
 
+    try:
+        with open(json_path, "r", encoding="utf-8") as f:
+            combinations_db = json.load(f)
+    except Exception as e:
+        print(f"[SOLVER ERROR] Không thể đọc combinations JSON: {e}")
+        return None
+
+    target_str = str(target_rating)
+    if target_str not in combinations_db:
+        print(f"[SOLVER] Không tìm thấy combinations cho rating mục tiêu: {target_rating}")
+        return None
+
+    recipes = combinations_db[target_str]
+    best_solution = None
+    best_cost = float("inf")
+
+    for recipe in recipes:
+        req_players = recipe.get("players", {})
+        total_req_count = sum(req_players.values())
+        if total_req_count > sbc_size:
+            continue
+
+        # Nếu recipe yêu cầu ít hơn sbc_size, ta bù phần thiếu bằng rating thấp nhất có sẵn
+        actual_req = req_players.copy()
+        if total_req_count < sbc_size:
+            missing = sbc_size - total_req_count
+            avail_ratings = [p.get("rating", 0) for p in valid_players]
+            min_avail_rating = min(avail_ratings) if avail_ratings else 80
+            min_r_str = str(min_avail_rating)
+            actual_req[min_r_str] = actual_req.get(min_r_str, 0) + missing
+
+        # Thử khớp các yêu cầu của recipe (cho phép rating cao hơn thay thế rating thấp hơn)
+        sorted_reqs = []
+        for r_str, count in actual_req.items():
+            sorted_reqs.extend([int(r_str)] * count)
+        sorted_reqs.sort(reverse=True)
+
+        temp_players = list(valid_players)
+        selected_players = []
+        possible = True
+
+        for req_r in sorted_reqs:
+            candidate = None
+            best_idx = -1
+            min_cand_cost = float("inf")
+            
+            for idx, p in enumerate(temp_players):
+                p_rating = p.get("rating", 0)
+                if p_rating >= req_r:
+                    p_cost = p.get("cost", 99999)
+                    if p_cost < min_cand_cost:
+                        min_cand_cost = p_cost
+                        candidate = p
+                        best_idx = idx
+            
+            if candidate is not None:
+                selected_players.append(candidate)
+                temp_players.pop(best_idx)
+            else:
+                possible = False
+                break
+
+        if possible:
+            sbc_rating = calculate_sbc_rating([p.get("rating", 0) for p in selected_players])
+            
+            # Đếm số lượng Rare và TOTW/TOTS
+            rare_count = sum(1 for p in selected_players if p.get("rare", False))
+            special_count = sum(1 for p in selected_players if p.get("totw", False) or p.get("tots", False))
+            
+            if sbc_rating >= target_rating and rare_count >= min_rare and special_count >= min_totw_tots:
+                cost = sum(p.get("cost", 99999) for p in selected_players)
+                
+                # --- Thưởng (Discount) cho chiến thuật High-Low ---
+                ratings_used = [p.get("rating", 0) for p in selected_players]
+                max_r = max(ratings_used) if ratings_used else 0
+                min_r = min(ratings_used) if ratings_used else 0
+                
+                # 1. Thưởng cực lớn nếu sử dụng được thẻ Storage có rating cao nhất hiện tại
+                storage_players = [p for p in valid_players if p.get("sbc_storage", False)]
+                max_storage_r = max(p.get("rating", 0) for p in storage_players) if storage_players else 0
+                if max_storage_r > 0 and max_r >= max_storage_r:
+                    cost -= 1000.0  # Ưu tiên tuyệt đối để giải phóng thẻ trùng cao nhất
+                    
+                # 2. Thưởng cho độ lệch rating lớn (chiến thuật High-Low)
+                rating_spread = max_r - min_r
+                if rating_spread >= 10:
+                    cost -= 300.0
+                elif rating_spread >= 6:
+                    cost -= 150.0
+
+                if cost < best_cost:
+                    best_cost = cost
+                    best_solution = {
+                        "players": selected_players,
+                        "target_rating": target_rating,
+                        "solved_rating": sbc_rating,
+                        "total_cost": cost
+                    }
+
+    return best_solution
 def solve_sbc_milp(valid_players: list, min_rating: int, min_rare: int,
                    min_totw_tots: int, sbc_size: int):
-    """
-    Giải SBC bằng Mixed-Integer Linear Programming (PuLP).
-
-    Biến quyết định: x[i] ∈ {0, 1} — chọn cầu thủ i hay không
-
-    Hàm mục tiêu:
-        Minimize: sum(x[i] * cost[i])
-
-    Các ràng buộc:
-        1. sum(x) == sbc_size                              (đúng số cầu thủ)
-        2. sum(x[i] * rating[i]) >= min_rating * sbc_size  (xấp xỉ rating)
-        3. sum(x[i] if rare[i]) >= min_rare                (ràng buộc Rare)
-        4. sum(x[i] if totw/tots[i]) >= min_totw_tots      (ràng buộc TOTW)
-
-    Sau khi giải xong, verify lại bằng calculate_sbc_rating() chính xác.
-    Nếu không đạt → tăng target thêm 1 và thử lại (tối đa 3 lần).
-
-    Trả về: list cầu thủ được chọn, hoặc None nếu không tìm được.
-    """
     try:
         import pulp
     except ImportError:
-        return None  # PuLP không được cài → fallback
+        return None
 
     n = len(valid_players)
     if n < sbc_size:
         return None
 
-    # Thử với target_sum tăng dần (để bù cho phần excess không mô hình hóa được)
     for bonus in range(4):
         target_sum = (min_rating + bonus) * sbc_size
 
         prob = pulp.LpProblem(f"SBC_Solver_bonus{bonus}", pulp.LpMinimize)
         x = [pulp.LpVariable(f"x_{i}", cat='Binary') for i in range(n)]
 
-        # Hàm mục tiêu: tối thiểu hóa tổng chi phí
         prob += pulp.lpSum(x[i] * valid_players[i]['cost'] for i in range(n))
 
-        # Ràng buộc 1: Đúng sbc_size cầu thủ
         prob += pulp.lpSum(x) == sbc_size
 
-        # Ràng buộc 2: Xấp xỉ rating (tổng rating >= target_sum)
-        prob += pulp.lpSum(x[i] * valid_players[i]['rating'] for i in range(n)) >= target_sum
+        if min_rating >= 87:
+            estimated_avg = max(0.0, min_rating - 3.5)
+            contributions = [
+                p['rating'] + max(0.0, p['rating'] - estimated_avg)
+                for p in valid_players
+            ]
+            prob += pulp.lpSum(x[i] * contributions[i] for i in range(n)) >= target_sum
+            # Chỉ áp dụng giới hạn trên nghiêm ngặt đối với SBC rating cao để tránh lãng phí thẻ siêu cao
+            prob += pulp.lpSum(x[i] * contributions[i] for i in range(n)) <= (min_rating + 2.5) * sbc_size
+        else:
+            # SBC rating thấp: Không cần giới hạn trên chặt chẽ và dùng công thức đóng góp đơn giản
+            contributions = [p['rating'] for p in valid_players]
+            prob += pulp.lpSum(x[i] * contributions[i] for i in range(n)) >= target_sum
 
-        # Ràng buộc 3: Số Rare tối thiểu
         if min_rare > 0:
             prob += pulp.lpSum(
                 x[i] for i in range(n) if valid_players[i].get('rare', False)
             ) >= min_rare
 
-        # Ràng buộc 4: Số TOTW/TOTS tối thiểu
         if min_totw_tots > 0:
             prob += pulp.lpSum(
                 x[i] for i in range(n)
                 if valid_players[i].get('totw', False) or valid_players[i].get('tots', False)
             ) >= min_totw_tots
 
-        # Giải bài toán (ẩn log của solver)
         status = prob.solve(pulp.PULP_CBC_CMD(msg=False))
 
         if pulp.LpStatus[prob.status] != 'Optimal':
             continue
 
-        # Thu thập nghiệm
         selected = [valid_players[i] for i in range(n) if pulp.value(x[i]) == 1]
         if len(selected) != sbc_size:
             continue
 
-        # Verify rating bằng công thức chính xác của EA
         actual_rating = calculate_sbc_rating([p['rating'] for p in selected])
         if actual_rating >= min_rating:
-            return selected  # ✅ Nghiệm hợp lệ
+            return selected
 
-        # Rating không đạt → thử lại với bonus cao hơn
+    return None
 
-    return None  # Không tìm được nghiệm
-
-
-# =============================================================================
-# PHẦN 3: HEURISTIC FALLBACK SOLVER
-# =============================================================================
 
 def solve_sbc_heuristic(valid_players: list, min_rating: int, min_rare: int,
                         min_totw_tots: int, sbc_size: int,
                         players_by_rating: dict, search_ratings: list):
-    """
-    Giải SBC bằng đệ quy heuristic (brute-force có cắt nhánh).
-    Dùng khi PuLP không được cài đặt.
-    """
     best_solution = [None]
     best_cost = [float('inf')]
 
     def evaluate_combination(combination):
-        """Gán cầu thủ rẻ nhất vào tổ hợp rating, xử lý ràng buộc Rare/TOTW."""
         selected = []
         for r, count in combination.items():
             if count > 0:
@@ -148,7 +226,6 @@ def solve_sbc_heuristic(valid_players: list, min_rating: int, min_rare: int,
         rare_count    = sum(1 for p in selected if p.get('rare', False))
         special_count = sum(1 for p in selected if p.get('totw', False) or p.get('tots', False))
 
-        # Tráo đổi để đáp ứng ràng buộc Rare/TOTW
         if rare_count < min_rare or special_count < min_totw_tots:
             current = list(selected)
             for _ in range(sbc_size):
@@ -191,7 +268,8 @@ def solve_sbc_heuristic(valid_players: list, min_rating: int, min_rare: int,
             temp_ratings = []
             for r, cnt in combo.items():
                 temp_ratings.extend([r] * cnt)
-            if calculate_sbc_rating(temp_ratings) >= min_rating:
+            sbc_r = calculate_sbc_rating(temp_ratings)
+            if min_rating <= sbc_r <= min_rating + 1:
                 sol = evaluate_combination(combo)
                 if sol and sol['total_cost'] < best_cost[0]:
                     best_cost[0] = sol['total_cost']
@@ -210,31 +288,15 @@ def solve_sbc_heuristic(valid_players: list, min_rating: int, min_rare: int,
     return best_solution[0]['players'] if best_solution[0] else None
 
 
-# =============================================================================
-# PHẦN 4: HÀM GIẢI CHÍNH
-# =============================================================================
-
 def solve_sbc(players: list, requirements: dict, config: dict):
-    """
-    Tìm tổ hợp cầu thủ tối ưu nhất để hoàn thành SBC.
-
-    Args:
-        players:      List dict cầu thủ từ Web App (đã được mapPlayer)
-        requirements: Dict đã parse bởi parse_sbc_requirements():
-                      { min_rating, min_rare, min_totw_tots, size, name }
-        config:       Dict cấu hình từ config.json:
-                      { min_rating_to_use, max_rating_to_use, blacklist_ids, ... }
-
-    Returns:
-        Dict kết quả hoặc None nếu không tìm được nghiệm.
-    """
     min_rating    = requirements.get("min_rating", 83)
     min_rare      = requirements.get("min_rare", 0)
     min_totw_tots = requirements.get("min_totw_tots", 0)
     sbc_size      = requirements.get("size", 11)
 
-    min_use_rating = config.get("min_rating_to_use", 80)
+    min_use_rating = max(config.get("min_rating_to_use", 80), 80)
     max_use_rating = config.get("max_rating_to_use", 88)
+    prioritize_sbc_storage = config.get("prioritize_sbc_storage", True)
     blacklist_ids  = set(str(bid) for bid in config.get("blacklist_ids", []))
 
     print(f"[SOLVER] Mục tiêu: rating≥{min_rating}, rare≥{min_rare}, "
@@ -242,24 +304,27 @@ def solve_sbc(players: list, requirements: dict, config: dict):
     print(f"[SOLVER] Phạm vi rating dùng: {min_use_rating}–{max_use_rating}, "
           f"blacklist={len(blacklist_ids)} IDs")
 
-    # -------------------------------------------------------------------------
-    # Bước 1: Lọc cầu thủ hợp lệ
-    # -------------------------------------------------------------------------
+    # 1. Lọc cầu thủ hợp lệ
     valid_players = []
     for p in players:
         pid = str(p.get("id", ""))
         if pid in blacklist_ids:
             continue
 
-        is_special = p.get("totw", False) or p.get("tots", False)
         r = p.get("rating", 0)
+        # Nếu SBC rating >= 89, bắt buộc chỉ dùng cầu thủ từ 84 trở lên (không được dùng thẻ 80-83)
+        if min_rating >= 89 and r < 84:
+            continue
+        if r < 80:
+            continue
 
-        # Thẻ đặc biệt: luôn được xét (dùng để gánh rating)
-        if is_special:
+        is_special = p.get("totw", False) or p.get("tots", False)
+        is_storage = p.get("sbc_storage", False)
+
+        if is_special or (is_storage and prioritize_sbc_storage):
             valid_players.append(p)
             continue
 
-        # Chỉ dùng cầu thủ trong phạm vi rating cho phép
         if min_use_rating <= r <= max_use_rating:
             valid_players.append(p)
 
@@ -267,68 +332,99 @@ def solve_sbc(players: list, requirements: dict, config: dict):
         print(f"[SOLVER ERROR] Không có cầu thủ khả dụng nào trong phạm vi rating {min_use_rating}–{max_use_rating}!")
         return None
 
-    # -------------------------------------------------------------------------
-    # Bước 2: Tính chi phí ảo (Virtual Cost)
-    #   - SBC Storage:   cost = 10         (ưu tiên cao nhất)
-    #   - Untradeable:   cost = 100 + r*15 (ưu tiên thứ hai, rating thấp trước)
-    #   - Tradeable:     cost = market + 1000 (tránh dùng nhầm thẻ có giá trị)
-    # -------------------------------------------------------------------------
-    for p in valid_players:
-        if p.get("sbc_storage", False):
-            p["cost"] = 10
-        elif p.get("untradeable", False):
-            p["cost"] = 100 + (p.get("rating", 80) * 15)
-        else:
-            p["cost"] = max(p.get("market_price", 1000), 400) + 1000
+    # 2. Tính chi phí ảo (Virtual Cost)
+    prioritize_untradeable = config.get("prioritize_untradeable", True)
+    prioritize_sbc_storage = config.get("prioritize_sbc_storage", True)
 
-    # -------------------------------------------------------------------------
-    # Bước 2.5: Lọc bỏ trùng lặp (Duplicate cards) có cùng definitionId
-    # Nếu trùng definitionId (hoặc trùng tên nếu definitionId = 0), chỉ giữ lại thẻ rẻ nhất
-    # -------------------------------------------------------------------------
+    # Xác định khoảng rating thấp cận dưới (low-end) động dựa trên yêu cầu rating tối thiểu của SBC
+    if min_rating <= 88:
+        low_min, low_max = 81, 83
+        mid_min = 84
+    else:
+        low_min, low_max = 84, 86
+        mid_min = 87
+
+    for p in valid_players:
+        is_storage = p.get("sbc_storage", False)
+        is_untradeable = p.get("untradeable", False)
+        r = p.get("rating", 80)
+        market_price = max(p.get("market_price", 1000), 400)
+
+        # Chi phí ảo để kích thích chiến thuật High-Low (dùng cận trên r >= min_rating & cận dưới động, bảo tồn cận trung)
+        if is_storage and prioritize_sbc_storage:
+            if r >= min_rating:
+                # Cận trên Storage: Rất rẻ, tăng dần từ min_rating để ưu tiên chọn thẻ thấp hơn trước (tránh lãng phí thẻ siêu cao)
+                p["cost"] = 10.0 + (r - min_rating) * 2.0
+            elif low_min <= r <= low_max:
+                # Cận dưới Storage động: Cực kỳ rẻ để phối hợp
+                p["cost"] = 5.0 + (r - low_min) * 3.0
+            elif r < low_min:
+                # Dưới cận dưới Storage: Đắt vừa phải để tránh ưu tiên
+                p["cost"] = 200.0 + (low_min - r) * 5.0
+            else:
+                # Cận trung Storage (mid_min đến 92): Rất đắt để bảo tồn thẻ
+                p["cost"] = 250.0 + (88 - abs(r - 88)) * 10.0
+        elif (is_untradeable or is_storage) and prioritize_untradeable:
+            if low_min <= r <= low_max:
+                # Cận dưới Club động: Rất rẻ để dùng bù phần thiếu
+                p["cost"] = 15.0 + (r - low_min) * 5.0
+            elif r < low_min:
+                # Dưới cận dưới Club: Đắt vừa phải để tránh ưu tiên
+                p["cost"] = 350.0 + (low_min - r) * 5.0
+            else:
+                # Cận trung và cận trên Club: Cực kỳ đắt để tránh sử dụng
+                p["cost"] = 400.0 + (r - mid_min) * 20.0
+        else:
+            # Club Tradeable: Đắt nhất để tránh lãng phí tài sản bán được
+            p["cost"] = market_price + 1000
+
+    # 2.5 Lọc bỏ trùng lặp
     unique_players = {}
     for p in valid_players:
         def_id = p.get("definitionId", 0)
-        # Fallback về tên cầu thủ nếu không có definitionId
         key = def_id if def_id > 0 else p.get("name", "Unknown")
 
         if key not in unique_players:
             unique_players[key] = p
         else:
-            # So sánh cost để giữ lại thẻ tối ưu nhất
             if p["cost"] < unique_players[key]["cost"]:
                 unique_players[key] = p
 
     valid_players = list(unique_players.values())
     print(f"[SOLVER] Cầu thủ hợp lệ sau lọc trùng lặp: {len(valid_players)}/{len(players)}")
 
-    # -------------------------------------------------------------------------
-    # Bước 3: Thử MILP Solver (Primary)
-    # -------------------------------------------------------------------------
-    try:
-        import pulp
-        pulp_available = True
-    except ImportError:
-        pulp_available = False
-        print("[SOLVER] PuLP không được cài. Sử dụng heuristic fallback.")
-        print("[SOLVER] Gợi ý: pip install pulp")
-
     selected_players = None
 
-    if pulp_available:
-        print("[SOLVER] Đang chạy MILP Solver (PuLP)...")
-        selected_players = solve_sbc_milp(
-            valid_players, min_rating, min_rare, min_totw_tots, sbc_size
-        )
-        if selected_players:
-            print(f"[SOLVER] ✅ MILP tìm được nghiệm tối ưu.")
-        else:
-            print("[SOLVER] MILP không tìm được nghiệm. Thử heuristic fallback...")
+    # 3. Thử tìm nghiệm bằng FUT.GG Combinations Database (Chỉ áp dụng cho SBC rating thấp <87 để tránh lãng phí)
+    if sbc_size == 11 and min_rating < 87:
+        print("[SOLVER] Thử tìm nghiệm tối ưu từ FUT.GG Combinations Database...")
+        db_solution = solve_using_combinations(valid_players, min_rating, min_rare, min_totw_tots, sbc_size)
+        if db_solution:
+            # Ngăn chặn việc lãng phí: Rating thực tế không được vượt quá mục tiêu + 1
+            if db_solution["solved_rating"] <= min_rating + 1:
+                print(f"[SOLVER] ✅ Tìm thấy nghiệm tối ưu từ Combinations Database! (Rating thực tế đạt: {db_solution['solved_rating']})")
+                selected_players = db_solution["players"]
+            else:
+                print(f"[SOLVER] Bỏ qua combinations vì rating thực tế ({db_solution['solved_rating']}) quá cao so với mục tiêu ({min_rating}) gây lãng phí.")
 
-    # -------------------------------------------------------------------------
-    # Bước 4: Fallback Heuristic nếu MILP thất bại hoặc không có PuLP
-    # -------------------------------------------------------------------------
+    # 4. Thử MILP Solver nếu database bị bỏ qua hoặc không tìm thấy nghiệm hợp lý
     if not selected_players:
-        # Phân nhóm theo rating và sắp xếp theo cost
+        try:
+            import pulp
+            pulp_available = True
+        except ImportError:
+            pulp_available = False
+
+        if pulp_available:
+            print("[SOLVER] Đang chạy MILP Solver (PuLP)...")
+            selected_players = solve_sbc_milp(
+                valid_players, min_rating, min_rare, min_totw_tots, sbc_size
+            )
+            if selected_players:
+                print(f"[SOLVER] ✅ MILP tìm được nghiệm tối ưu.")
+
+    # 5. Thử Heuristic Fallback
+    if not selected_players:
         players_by_rating = {}
         for p in valid_players:
             r = p["rating"]
@@ -339,9 +435,7 @@ def solve_sbc(players: list, requirements: dict, config: dict):
             players_by_rating[r].sort(key=lambda p: p["cost"])
 
         available_ratings = sorted(players_by_rating.keys())
-        # Giới hạn phạm vi tìm kiếm xung quanh target rating
-        search_ratings = [r for r in available_ratings
-                          if (min_rating - 4) <= r <= (min_rating + 5)]
+        search_ratings = [r for r in available_ratings if (min_rating - 4) <= r <= (min_rating + 5)]
         if not search_ratings:
             search_ratings = available_ratings
 
@@ -350,19 +444,15 @@ def solve_sbc(players: list, requirements: dict, config: dict):
             valid_players, min_rating, min_rare, min_totw_tots,
             sbc_size, players_by_rating, search_ratings
         )
-
         if selected_players:
             print(f"[SOLVER] ✅ Heuristic tìm được nghiệm.")
-        else:
-            print("[SOLVER] ❌ Cả MILP lẫn heuristic đều không tìm được nghiệm.")
-            return None
 
-    # -------------------------------------------------------------------------
-    # Bước 5: Định dạng kết quả đầu ra
-    # -------------------------------------------------------------------------
+    if not selected_players:
+        print("[SOLVER ERROR] Không tìm thấy nghiệm phù hợp nào!")
+        return None
+
+    # 6. Định dạng kết quả đầu ra
     solved_rating = calculate_sbc_rating([p["rating"] for p in selected_players])
-
-    # Tính chi phí thực tế (không tính thẻ SBC Storage vì đã trong tay)
     total_market_cost = sum(
         p.get("market_price", 500)
         for p in selected_players
@@ -399,9 +489,19 @@ def solve_sbc(players: list, requirements: dict, config: dict):
 
 if __name__ == "__main__":
     import csv
+    import os
+    import sys
+
+    if hasattr(sys.stdout, 'reconfigure'):
+        sys.stdout.reconfigure(encoding='utf-8')
+    if hasattr(sys.stderr, 'reconfigure'):
+        sys.stderr.reconfigure(encoding='utf-8')
 
     print("[SOLVER TEST] Chạy test solver với file club-analyzer-2.csv...")
-    csv_path = "/Users/binhnguyenthanh/Documents/FC Ultimate/.agents/skills/fc_sbc_solve/Database/club-analyzer-2.csv"
+    # Tự động định vị file CSV tương đối theo thư mục của file script
+    SRC_DIR = os.path.dirname(os.path.abspath(__file__))
+    SOLVE_DIR = os.path.dirname(SRC_DIR)
+    csv_path = os.path.join(SOLVE_DIR, "Database", "club-analyzer-2.csv")
 
     mock_players = []
     try:

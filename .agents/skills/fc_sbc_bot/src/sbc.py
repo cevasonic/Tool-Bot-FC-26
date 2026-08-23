@@ -465,17 +465,29 @@ def execute_sbc_step(page, config, paletools_js, sbc_name, max_repeats, complete
                 raise Exception("Không thể chuyển sang màn hình SBC Builder sau tất cả các lượt thử click và đã thử reload trang")
             
             # Tự động phát hiện xem có cần cấu hình template hay không bằng cách check nút Build Using Template của PaleTools
-            is_template_disabled = page.evaluate("""() => {
-                const buttons = Array.from(document.querySelectorAll('button'));
-                const tBtn = buttons.find(b => {
-                    const txt = b.innerText.toLowerCase();
-                    return txt.includes('template') || txt.includes('bằng mẫu') || txt.includes('plantilla') || txt.includes('modelo');
-                });
-                if (tBtn) {
-                    return tBtn.disabled || tBtn.classList.contains('disabled') || tBtn.getAttribute('disabled') !== null;
-                }
-                return true;
-            }""")
+            # Chờ tối đa 3 giây để nút xuất hiện và sẵn sàng (được load đầy đủ thông tin template)
+            is_template_disabled = True
+            for wait_idx in range(15):
+                btn_state = page.evaluate("""() => {
+                    const buttons = Array.from(document.querySelectorAll('button'));
+                    const tBtn = buttons.find(b => {
+                        const txt = b.innerText.toLowerCase();
+                        return txt.includes('template') || txt.includes('bằng mẫu') || txt.includes('plantilla') || txt.includes('modelo');
+                    });
+                    if (tBtn) {
+                        const disabled = tBtn.disabled || tBtn.classList.contains('disabled') || tBtn.getAttribute('disabled') !== null;
+                        return { found: true, disabled: disabled };
+                    }
+                    return { found: false, disabled: true };
+                }""")
+                
+                if btn_state.get("found", False):
+                    is_template_disabled = btn_state.get("disabled", True)
+                    # Nếu tìm thấy nút và nó KHÔNG bị disabled (nghĩa là đã có template cấu hình trước đó),
+                    # ta có thể tiếp tục chạy ngay mà không cần đợi.
+                    if not is_template_disabled:
+                        break
+                time.sleep(0.2)
             
             if (sbc_count == 0 and config.get("setup_mode", False)) or is_template_disabled:
                 if is_template_disabled:

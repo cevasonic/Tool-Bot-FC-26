@@ -8,6 +8,15 @@ description: Tự động hóa làm SBC và mở Pack trên EA FC UT Web App tí
 > **QUY ĐỊNH VẬN HÀNH BẮT BUỘC ĐỐI VỚI AI AGENT:**
 > - Việc chạy skill phải được tự động kích hoạt hoàn toàn. **TUYỆT ĐỐI KHÔNG BẮT NGƯỜI DÙNG PHẢI TỰ CHẠY LỆNH** hay các file .bat.
 > - Tất cả các thao tác phải được chạy trực quan trên trình duyệt Google Chrome hiển thị giao diện (`headless=False`). **NGHIÊM CẤM CHẠY NGẦM (HEADLESS)**.
+> - **HƯỚNG DẪN HIỂN THỊ CỬA SỔ CHROME TRÊN WINDOWS:** Khi chạy lệnh trực tiếp từ background shell của IDE, Windows sẽ tự động chạy ẩn Chrome. Để Chrome hiển thị trực quan trên màn hình người dùng, AI Agent **PHẢI** tạo một Scheduled Task tạm thời chạy ở chế độ tương tác (Interactive) rồi kích hoạt nó bằng các lệnh sau:
+>   ```powershell
+>   # 1. Tạo task tạm thời với đường dẫn batch file được bao trong dấu nháy kép escape
+>   cmd.exe /c 'schtasks /create /tn "SBCBotTask" /tr "\"d:\Lap Trinh\FC 26 Tool\.agents\skills\fc_sbc_bot\run_bot_interactive.bat\"" /sc once /sd 01/01/2099 /st 00:00 /it /f'
+>   # 2. Khởi chạy task ngay lập tức trong session của người dùng
+>   schtasks /run /tn "SBCBotTask"
+>   # 3. Xóa task tạm thời
+>   schtasks /delete /tn "SBCBotTask" /f
+>   ```
 
 Skill này tự động hóa việc hoàn thành các SBC yêu thích và mở pack phần thưởng trực tiếp trên EA Sports FC Ultimate Team Web App thông qua Playwright và PaleTools.
 

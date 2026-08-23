@@ -34,15 +34,15 @@ def inject_extractor_script(page):
 
 _RATING_KEYS = [
     "teamrating", "squad_rating", "averagerating", "minrating",
-    "min_rating", "rating", "teamsrating"
+    "min_rating", "rating", "teamsrating", "team_rating", "đánh_giá"
 ]
 _RARE_KEYS = [
     "rare", "rarecount", "num_rare", "rareplayercount",
-    "minrare", "min_rare", "numrare"
+    "minrare", "min_rare", "numrare", "hiếm"
 ]
 _TOTW_KEYS = [
     "totw", "totwcount", "tots", "totscount", "special",
-    "specialcount", "inform", "informcount", "min_totw"
+    "specialcount", "inform", "informcount", "min_totw", "week", "in_form", "tuần", "đặc_biệt"
 ]
 _SIZE_KEYS = [
     "squadsize", "count", "num_players", "playercount", "size"
@@ -57,14 +57,14 @@ def parse_sbc_requirements(sbc_challenge: dict) -> dict:
     parsed = {
         "name": sbc_challenge.get("name", "SBC Challenge"),
         "size": sbc_challenge.get("size", 11),
-        "min_rating": 83,
+        "min_rating": 0,
         "min_rare": 0,
         "min_totw_tots": 0,
     }
 
     raw_reqs = sbc_challenge.get("requirements", [])
     if not raw_reqs:
-        print("[SOLVER MANAGER WARNING] requirements[] trống — dùng giá trị mặc định (min_rating=83).")
+        print("[SOLVER MANAGER WARNING] requirements[] trống — dùng giá trị mặc định (min_rating=0).")
         return parsed
 
     for req in raw_reqs:
@@ -72,6 +72,8 @@ def parse_sbc_requirements(sbc_challenge: dict) -> dict:
             continue
 
         req_type = str(req.get("type", "")).lower().strip().replace(" ", "_")
+        req_desc = str(req.get("desc", "")).lower().strip().replace(" ", "_")
+        match_str = f"{req_type}|{req_desc}"
         raw_val  = req.get("value", 0)
 
         try:
@@ -82,21 +84,21 @@ def parse_sbc_requirements(sbc_challenge: dict) -> dict:
         if val <= 0:
             continue
 
-        if any(k in req_type for k in _RATING_KEYS):
+        if any(k in match_str for k in _RATING_KEYS):
             parsed["min_rating"] = val
-            print(f"[SOLVER MANAGER] Parse → min_rating = {val} (type='{req_type}')")
+            print(f"[SOLVER MANAGER] Parse → min_rating = {val} (match='{match_str}')")
 
-        elif any(k in req_type for k in _RARE_KEYS):
+        elif any(k in match_str for k in _RARE_KEYS):
             parsed["min_rare"] = val
-            print(f"[SOLVER MANAGER] Parse → min_rare = {val} (type='{req_type}')")
+            print(f"[SOLVER MANAGER] Parse → min_rare = {val} (match='{match_str}')")
 
-        elif any(k in req_type for k in _TOTW_KEYS):
+        elif any(k in match_str for k in _TOTW_KEYS):
             parsed["min_totw_tots"] = val
-            print(f"[SOLVER MANAGER] Parse → min_totw_tots = {val} (type='{req_type}')")
+            print(f"[SOLVER MANAGER] Parse → min_totw_tots = {val} (match='{match_str}')")
 
-        elif any(k in req_type for k in _SIZE_KEYS):
+        elif any(k in match_str for k in _SIZE_KEYS):
             parsed["size"] = val
-            print(f"[SOLVER MANAGER] Parse → size = {val} (type='{req_type}')")
+            print(f"[SOLVER MANAGER] Parse → size = {val} (match='{match_str}')")
 
         else:
             print(f"[SOLVER MANAGER] Bỏ qua requirement: type='{req_type}', value={val}, desc='{req.get('desc', '')}'")
