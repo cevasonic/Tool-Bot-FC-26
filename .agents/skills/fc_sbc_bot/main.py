@@ -133,6 +133,7 @@ def run():
                     sbc_name = step_cfg.get("sbc_name")
                     max_repeats = step_cfg.get("max_repeats", -1)
                     supply_pack_name = step_cfg.get("supply_pack_name")
+                    save_count_key = step_cfg.get("save_count_key")
                     if max_repeats == -1:
                         max_repeats = 999999
                         

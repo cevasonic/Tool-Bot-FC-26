@@ -190,7 +190,7 @@ def execute_sbc_step(page, config, paletools_js, sbc_name, max_repeats, complete
     sbc_count = 0
     consecutive_errors = 0
     is_finished = False
-    has_supplied_this_run = False
+    consecutive_supplies = 0
     
     # Kiểm tra và dọn dẹp unassigned items trước khi bắt đầu các lượt SBC
     check_unassigned_badge_and_clear(page, config)
@@ -684,8 +684,8 @@ def execute_sbc_step(page, config, paletools_js, sbc_name, max_repeats, complete
                 
             # Nếu thực sự do thiếu thẻ (Concept, Trống, hoặc Toast báo)
             if is_concept_detected or is_squad_empty or is_no_players_toast or is_ineligible:
-                if supply_pack_name and not has_supplied_this_run:
-                    print("[INFO] Xác định thiếu thẻ bài. Đang thoát Builder để mở pack cứu tế...")
+                if supply_pack_name and consecutive_supplies < 3:
+                    print(f"[INFO] Xác định thiếu thẻ bài. Đang thoát Builder để mở pack cứu tế (Lần {consecutive_supplies + 1}/3)...")
                     try:
                         page.keyboard.press("Escape")
                         sleep_human_like(1.5, 2.5, page)
@@ -699,12 +699,12 @@ def execute_sbc_step(page, config, paletools_js, sbc_name, max_repeats, complete
                     print(f"[INFO] Thử mở 1 pack tiếp tế '{supply_pack_name}'...")
                     opened = open_single_supply_pack(page, config, paletools_js, supply_pack_name)
                     if opened:
-                        has_supplied_this_run = True  # Đánh dấu đã thực hiện cứu tế 1 lần
+                        consecutive_supplies += 1  # Tăng số lần tiếp tế liên tiếp
                         print(f"[OK] Đã mở thành công pack tiếp tế. Quay lại làm tiếp SBC '{sbc_name}'...")
                         continue
                         
-                # Nếu không có pack cứu tế hoặc đã cứu tế 1 lần rồi mà vẫn thiếu thẻ
-                print(f"[INFO] Tự động dừng làm SBC '{sbc_name}' do đã hết cầu thủ hợp lệ hoặc đã dùng hết lượt mở cứu tế.")
+                # Nếu không có pack cứu tế hoặc đã cứu tế 3 lần liên tiếp rồi mà vẫn thiếu thẻ
+                print(f"[INFO] Tự động dừng làm SBC '{sbc_name}' do đã hết cầu thủ hợp lệ hoặc đã dùng hết lượt mở cứu tế liên tiếp.")
                 is_finished = False
                 break
                 
@@ -721,6 +721,7 @@ def execute_sbc_step(page, config, paletools_js, sbc_name, max_repeats, complete
         sbc_count += 1
         completed_sbcs_total += 1
         consecutive_errors = 0
+        consecutive_supplies = 0  # Reset số lần tiếp tế liên tiếp khi làm thành công
         print(f"[OK] Đã hoàn thành lượt {sbc_count}.")
         if on_success_cb:
             try:

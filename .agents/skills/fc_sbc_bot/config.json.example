@@ -1,5 +1,18 @@
 {
   "setup_mode": false,
+  "sbc_solver": {
+    "enabled": true,
+    "min_rating_to_use": 70,
+    "max_rating_to_use": 89,
+    "prioritize_untradeable": true,
+    "prioritize_sbc_storage": true,
+    "protected_cards": {
+      "active_squad": true,
+      "favorites": true,
+      "evolutions": true,
+      "blacklist_ids": []
+    }
+  },
   "delays": {
     "before_build_min": 1.5,
     "before_build_max": 3.0,
@@ -119,13 +132,7 @@
     {
       "step": 17,
       "type": "sbc",
-      "sbc_name": "2 of 3 87+ Player Pick",
-      "max_repeats": -1
-    },
-    {
-      "step": 18,
-      "type": "sbc",
-      "sbc_name": "1 of 3 85+ Player Pick",
+      "sbc_name": "1 of 5 84+ Player Pick",
       "max_repeats": -1
     }
   ]

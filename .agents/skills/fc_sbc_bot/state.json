@@ -1,21 +1,23 @@
 {
-  "date": "2026-08-22",
+  "date": "2026-08-23",
   "completed_sbcs": {
     "Daily Bronze Upgrade": 14,
-    "Daily Silver Upgrade": 15,
-    "Daily Common Gold Upgrade": 15,
-    "Bronze Upgrade": 27
+    "Daily Silver Upgrade": 14,
+    "Bronze Upgrade": 2
+  },
+  "opened_packs": {
+    "BRONZE PLAYERS PREMIUM": 13
   },
   "context_vars": {
     "bronze_success_count": 14,
-    "silver_success_count": 0
+    "silver_success_count": 14
   },
   "steps_finished": {
     "0": true,
     "1": true,
-    "2": true,
-    "3": true,
-    "4": true,
+    "2": false,
+    "3": false,
+    "4": false,
     "5": true,
     "6": false,
     "7": false,
@@ -28,10 +30,5 @@
     "14": false,
     "15": false,
     "16": false
-  },
-  "opened_packs": {
-    "SILVER PLAYERS PREMIUM": 11,
-    "11x Gold Players Pack": 15,
-    "x2 Silver Players Pack": 23
   }
 }
