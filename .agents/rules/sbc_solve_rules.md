@@ -32,6 +32,7 @@ Chi phí ảo (Virtual Cost) trong `solver.py` bắt buộc phải tuân thủ p
     *   Nếu `min_rating >= 89`: Khoảng rating `84` đến `86` là cận dưới.
 *   **Công thức định giá chi phí ảo:**
     *   **Cận trên Storage ($r \ge min\_rating$):** Chi phí ảo rất rẻ, **tăng dần** theo rating: `cost = 10.0 + (r - min_rating) * 2.0`. Giúp ưu tiên lấy các thẻ cận trên thấp trước (ví dụ lấy 90 trước 95) để tránh lãng phí thẻ siêu cao.
+    *   **Cận trên Club Untradeable ($r \ge min\_rating$):** Chi phí ảo tương đối rẻ, tăng dần theo rating: `cost = 50.0 + (r - min_rating) * 5.0`. Cho phép dùng thẻ cao ở Club gánh team khi thiếu Storage nhưng vẫn ưu tiên Storage trước.
     *   **Cận dưới Storage/Club động:** Chi phí ảo cực rẻ (`5` đến `30` điểm) để ưu tiên phối hợp gánh phần thiếu.
     *   **Cận trung (nằm giữa cận dưới và cận trên):** Chi phí ảo cực đắt (lên tới `250` điểm ở Storage và `400+` điểm ở Club) để ngăn cản tuyệt đối việc sử dụng thẻ cận trung.
     *   **Dưới cận dưới động ($r < low\_min$):** Chi phí ảo đắt vừa phải (`200` ở Storage và `350` ở Club) để chỉ dùng làm dự phòng cuối cùng khi hết thẻ cận dưới động.

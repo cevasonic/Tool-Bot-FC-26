@@ -366,14 +366,17 @@ def solve_sbc(players: list, requirements: dict, config: dict):
                 # Cận trung Storage (mid_min đến 92): Rất đắt để bảo tồn thẻ
                 p["cost"] = 250.0 + (88 - abs(r - 88)) * 10.0
         elif (is_untradeable or is_storage) and prioritize_untradeable:
-            if low_min <= r <= low_max:
+            if r >= min_rating:
+                # Cận trên Club Untradeable: Rẻ để sử dụng gánh team nếu thiếu Storage
+                p["cost"] = 50.0 + (r - min_rating) * 5.0
+            elif low_min <= r <= low_max:
                 # Cận dưới Club động: Rất rẻ để dùng bù phần thiếu
                 p["cost"] = 15.0 + (r - low_min) * 5.0
             elif r < low_min:
                 # Dưới cận dưới Club: Đắt vừa phải để tránh ưu tiên
                 p["cost"] = 350.0 + (low_min - r) * 5.0
             else:
-                # Cận trung và cận trên Club: Cực kỳ đắt để tránh sử dụng
+                # Cận trung Club (mid_min đến min_rating - 1): Cực kỳ đắt để tránh sử dụng
                 p["cost"] = 400.0 + (r - mid_min) * 20.0
         else:
             # Club Tradeable: Đắt nhất để tránh lãng phí tài sản bán được
