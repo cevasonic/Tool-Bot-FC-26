@@ -1,31 +1,14 @@
 """
-solver.py — v2.0
+solver.py — v3.1
 
-Thuật toán tối ưu hóa giải SBC cho EA FC 26.
-
-CHIẾN LƯỢC SOLVER:
-  - Primary:  MILP (Mixed-Integer Linear Programming) bằng thư viện PuLP
-              → Tối ưu hóa tuyến tính đảm bảo tìm được nghiệm tốt nhất
-              → Nhanh hơn nhiều so với brute-force với tập cầu thủ lớn
-  - Fallback: Đệ quy heuristic (sử dụng nếu PuLP không được cài)
-              → Tương thích ngược, không cần cài thêm
-
-CÔNG THỨC RATING SBC CỦA EA:
-  rating = floor(avg + excess_sum / size)
-  Trong đó: excess_sum = sum(max(0, r - avg) for r in ratings)
-
-  Lưu ý: MILP xấp xỉ bằng ràng buộc sum(rating) >= min_rating * size,
-  sau đó verify lại bằng calculate_sbc_rating() chính xác.
+Thuật toán giải SBC dựa trên tra cứu công thức rating tĩnh từ rating_combinations.json (FUT.GG),
+ưu tiên nguồn cầu thủ từ SBC Storage, Club Untradeable rồi tới Club Tradeable.
+Hỗ trợ giải thiếu thẻ (incomplete solution) nếu không đủ cầu thủ.
 """
 
 import math
 import json
 import os
-
-
-# =============================================================================
-# PHẦN 1: CÔNG THỨC RATING SBC CỦA EA
-# =============================================================================
 
 def calculate_sbc_rating(ratings: list) -> int:
     """
@@ -40,327 +23,38 @@ def calculate_sbc_rating(ratings: list) -> int:
     excess_sum = sum(max(0.0, r - avg) for r in ratings)
     return math.floor(avg + excess_sum / size)
 
-
-def solve_using_combinations(valid_players, target_rating, min_rare, min_totw_tots, sbc_size):
-    # 1. Load rating_combinations.json
-    resources_dir = os.path.join(os.path.dirname(__file__), "..", "resources")
-    json_path = os.path.join(resources_dir, "rating_combinations.json")
-    if not os.path.exists(json_path):
-        print(f"[SOLVER] Không tìm thấy tệp combinations: {json_path}")
-        return None
-
-    try:
-        with open(json_path, "r", encoding="utf-8") as f:
-            combinations_db = json.load(f)
-    except Exception as e:
-        print(f"[SOLVER ERROR] Không thể đọc combinations JSON: {e}")
-        return None
-
-    target_str = str(target_rating)
-    if target_str not in combinations_db:
-        print(f"[SOLVER] Không tìm thấy combinations cho rating mục tiêu: {target_rating}")
-        return None
-
-    recipes = combinations_db[target_str]
-    best_solution = None
-    best_cost = float("inf")
-
-    for recipe in recipes:
-        req_players = recipe.get("players", {})
-        total_req_count = sum(req_players.values())
-        if total_req_count > sbc_size:
-            continue
-
-        # Nếu recipe yêu cầu ít hơn sbc_size, ta bù phần thiếu bằng rating thấp nhất có sẵn
-        actual_req = req_players.copy()
-        if total_req_count < sbc_size:
-            missing = sbc_size - total_req_count
-            avail_ratings = [p.get("rating", 0) for p in valid_players]
-            min_avail_rating = min(avail_ratings) if avail_ratings else 80
-            min_r_str = str(min_avail_rating)
-            actual_req[min_r_str] = actual_req.get(min_r_str, 0) + missing
-
-        # Thử khớp các yêu cầu của recipe (cho phép rating cao hơn thay thế rating thấp hơn)
-        sorted_reqs = []
-        for r_str, count in actual_req.items():
-            sorted_reqs.extend([int(r_str)] * count)
-        sorted_reqs.sort(reverse=True)
-
-        temp_players = list(valid_players)
-        selected_players = []
-        possible = True
-
-        for req_r in sorted_reqs:
-            candidate = None
-            best_idx = -1
-            min_cand_cost = float("inf")
-            
-            for idx, p in enumerate(temp_players):
-                p_rating = p.get("rating", 0)
-                if p_rating >= req_r:
-                    p_cost = p.get("cost", 99999)
-                    if p_cost < min_cand_cost:
-                        min_cand_cost = p_cost
-                        candidate = p
-                        best_idx = idx
-            
-            if candidate is not None:
-                selected_players.append(candidate)
-                temp_players.pop(best_idx)
-            else:
-                possible = False
-                break
-
-        if possible:
-            sbc_rating = calculate_sbc_rating([p.get("rating", 0) for p in selected_players])
-            
-            # Đếm số lượng Rare và TOTW/TOTS
-            rare_count = sum(1 for p in selected_players if p.get("rare", False))
-            special_count = sum(1 for p in selected_players if p.get("totw", False) or p.get("tots", False))
-            
-            if sbc_rating >= target_rating and rare_count >= min_rare and special_count >= min_totw_tots:
-                cost = sum(p.get("cost", 99999) for p in selected_players)
-                
-                # --- Thưởng (Discount) cho chiến thuật High-Low ---
-                ratings_used = [p.get("rating", 0) for p in selected_players]
-                max_r = max(ratings_used) if ratings_used else 0
-                min_r = min(ratings_used) if ratings_used else 0
-                
-                # 1. Thưởng cực lớn nếu sử dụng được thẻ Storage có rating cao nhất hiện tại
-                storage_players = [p for p in valid_players if p.get("sbc_storage", False)]
-                max_storage_r = max(p.get("rating", 0) for p in storage_players) if storage_players else 0
-                if max_storage_r > 0 and max_r >= max_storage_r:
-                    cost -= 1000.0  # Ưu tiên tuyệt đối để giải phóng thẻ trùng cao nhất
-                    
-                # 2. Thưởng cho độ lệch rating lớn (chiến thuật High-Low)
-                rating_spread = max_r - min_r
-                if rating_spread >= 10:
-                    cost -= 300.0
-                elif rating_spread >= 6:
-                    cost -= 150.0
-
-                if cost < best_cost:
-                    best_cost = cost
-                    best_solution = {
-                        "players": selected_players,
-                        "target_rating": target_rating,
-                        "solved_rating": sbc_rating,
-                        "total_cost": cost
-                    }
-
-    return best_solution
-def solve_sbc_milp(valid_players: list, min_rating: int, min_rare: int,
-                   min_totw_tots: int, sbc_size: int):
-    try:
-        import pulp
-    except ImportError:
-        return None
-
-    n = len(valid_players)
-    if n < sbc_size:
-        return None
-
-    best_solution = None
-    best_cost = float('inf')
-
-    for bonus in range(4):
-        target_sum = (min_rating + bonus) * sbc_size
-
-        prob = pulp.LpProblem(f"SBC_Solver_bonus{bonus}", pulp.LpMinimize)
-        x = [pulp.LpVariable(f"x_{i}", cat='Binary') for i in range(n)]
-
-        prob += pulp.lpSum(x[i] * valid_players[i]['cost'] for i in range(n))
-
-        prob += pulp.lpSum(x) == sbc_size
-
-        if min_rating >= 87:
-            estimated_avg = max(0.0, min_rating - 3.5)
-            contributions = [
-                p['rating'] + max(0.0, p['rating'] - estimated_avg)
-                for p in valid_players
-            ]
-            prob += pulp.lpSum(x[i] * contributions[i] for i in range(n)) >= target_sum
-            # Chỉ áp dụng giới hạn trên nghiêm ngặt đối với SBC rating cao để tránh lãng phí thẻ siêu cao.
-            # Đối với SBC >= 90: giới hạn chặt chẽ (1.5) để tránh rating vọt lên quá cao gây lãng phí.
-            # Đối với SBC 87-88: giới hạn động (2.5 + bonus) để tránh bị vô nghiệm khi thiếu thẻ thấp.
-            if min_rating >= 90:
-                prob += pulp.lpSum(x[i] * contributions[i] for i in range(n)) <= (min_rating + 1.5) * sbc_size
-            else:
-                prob += pulp.lpSum(x[i] * contributions[i] for i in range(n)) <= (min_rating + 2.5 + bonus) * sbc_size
-        else:
-            # SBC rating thấp: Không cần giới hạn trên chặt chẽ và dùng công thức đóng góp đơn giản
-            contributions = [p['rating'] for p in valid_players]
-            prob += pulp.lpSum(x[i] * contributions[i] for i in range(n)) >= target_sum
-
-        if min_rare > 0:
-            prob += pulp.lpSum(
-                x[i] for i in range(n) if valid_players[i].get('rare', False)
-            ) >= min_rare
-
-        if min_totw_tots > 0:
-            prob += pulp.lpSum(
-                x[i] for i in range(n)
-                if valid_players[i].get('totw', False) or valid_players[i].get('tots', False)
-            ) >= min_totw_tots
-
-        status = prob.solve(pulp.PULP_CBC_CMD(msg=False))
-
-        if pulp.LpStatus[prob.status] != 'Optimal':
-            continue
-
-        selected = [valid_players[i] for i in range(n) if pulp.value(x[i]) == 1]
-        if len(selected) != sbc_size:
-            continue
-
-        actual_rating = calculate_sbc_rating([p['rating'] for p in selected])
-        if actual_rating >= min_rating:
-            cost = sum(p['cost'] for p in selected)
-            if cost < best_cost:
-                best_cost = cost
-                best_solution = selected
-
-    return best_solution
-
-
-def solve_sbc_heuristic(valid_players: list, min_rating: int, min_rare: int,
-                        min_totw_tots: int, sbc_size: int,
-                        players_by_rating: dict, search_ratings: list):
-    best_solution = [None]
-    best_cost = [float('inf')]
-
-    def evaluate_combination(combination):
-        selected = []
-        for r, count in combination.items():
-            if count > 0:
-                selected.extend(players_by_rating[r][:count])
-
-        rare_count    = sum(1 for p in selected if p.get('rare', False))
-        special_count = sum(1 for p in selected if p.get('totw', False) or p.get('tots', False))
-
-        if rare_count < min_rare or special_count < min_totw_tots:
-            current = list(selected)
-            for _ in range(sbc_size):
-                r_now = sum(1 for p in current if p.get('rare', False))
-                s_now = sum(1 for p in current if p.get('totw', False) or p.get('tots', False))
-                if r_now >= min_rare and s_now >= min_totw_tots:
-                    break
-
-                best_swap = None
-                min_diff = float('inf')
-                for idx, p_curr in enumerate(current):
-                    r_curr = p_curr['rating']
-                    if r_curr not in players_by_rating:
-                        continue
-                    for p_alt in players_by_rating[r_curr]:
-                        if p_alt in current:
-                            continue
-                        need_rare    = not p_curr.get('rare', False) and p_alt.get('rare', False) and r_now < min_rare
-                        need_special = (not p_curr.get('totw', False) and not p_curr.get('tots', False)) \
-                                       and (p_alt.get('totw', False) or p_alt.get('tots', False)) \
-                                       and s_now < min_totw_tots
-                        if need_rare or need_special:
-                            diff = p_alt['cost'] - p_curr['cost']
-                            if diff < min_diff:
-                                min_diff = diff
-                                best_swap = (idx, p_alt)
-
-                if best_swap:
-                    current[best_swap[0]] = best_swap[1]
-                else:
-                    return None
-            selected = current
-
-        total_cost = sum(p['cost'] for p in selected)
-        return {'players': selected, 'total_cost': total_cost,
-                'rating': calculate_sbc_rating([p['rating'] for p in selected])}
-
-    def search(idx, combo, remaining):
-        if remaining == 0:
-            temp_ratings = []
-            for r, cnt in combo.items():
-                temp_ratings.extend([r] * cnt)
-            sbc_r = calculate_sbc_rating(temp_ratings)
-            if min_rating <= sbc_r <= min_rating + 1:
-                sol = evaluate_combination(combo)
-                if sol and sol['total_cost'] < best_cost[0]:
-                    best_cost[0] = sol['total_cost']
-                    best_solution[0] = sol
-            return
-        if idx >= len(search_ratings):
-            return
-        r = search_ratings[idx]
-        max_use = min(remaining, len(players_by_rating[r]))
-        for count in range(max_use + 1):
-            combo[r] = count
-            search(idx + 1, combo, remaining - count)
-            del combo[r]
-
-    search(0, {}, sbc_size)
-    return best_solution[0]['players'] if best_solution[0] else None
-
+def calculate_sbc_rating_float(ratings: list) -> float:
+    """
+    Tính toán rating của đội hình SBC dưới dạng số thực (không dùng math.floor).
+    """
+    if not ratings:
+        return 0.0
+    size = len(ratings)
+    total = sum(ratings)
+    avg = total / size
+    excess_sum = sum(max(0.0, r - avg) for r in ratings)
+    return avg + excess_sum / size
 
 def solve_sbc(players: list, requirements: dict, config: dict):
-    min_rating    = requirements.get("min_rating", 83)
-    # Chỉ tập trung vào rating và size, bỏ qua các yêu cầu phụ khác (Rare, TOTW, TOTS) theo yêu cầu của người dùng
-    min_rare      = 0
-    min_totw_tots = 0
-    sbc_size      = requirements.get("size", 11)
-
-    prioritize_sbc_storage = config.get("prioritize_sbc_storage", True)
-    prioritize_untradeable = config.get("prioritize_untradeable", True)
-
-    # Xác định giới hạn trần rating từ thẻ cao nhất trong SBC Storage
-    storage_ratings = [p.get("rating", 0) for p in players if p.get("sbc_storage", False)]
-    max_storage_rating = max(storage_ratings) if storage_ratings else 0
-
-    if min_rating >= 90:
-        min_use_rating = max(config.get("min_rating_to_use", 80), 80)
-        if max_storage_rating > 0:
-            max_use_rating = max(max_storage_rating, min_rating)
-        else:
-            max_use_rating = max(config.get("max_rating_to_use", 90), min_rating)
-        # Đối với SBC >= 90: coi toàn bộ thẻ < min_rating là cận dưới để làm thẻ đệm gánh team
-        low_min = 80
-        low_max = min_rating - 1
-        mid_min = min_rating
-    else:
-        min_use_rating = max(config.get("min_rating_to_use", 80), 80)
-        if max_storage_rating > 0:
-            if max_storage_rating >= min_rating:
-                # Cấu hình mức max rating chính là cầu thủ có rating cao nhất trong sbc storage
-                max_use_rating = max_storage_rating
-            else:
-                # Nếu thẻ Storage quá thấp so với yêu cầu SBC, ta phải lấy thẻ từ Club để giải được
-                if min_rating >= 87:
-                    max_use_rating = 99
-                else:
-                    max_use_rating = max(config.get("max_rating_to_use", 88), min_rating + 1)
-        else:
-            # Nếu Storage trống, dùng cấu hình config
-            max_use_rating = config.get("max_rating_to_use", 88)
-            if min_rating >= 87:
-                max_use_rating = max(max_use_rating, 99)
-
-        if min_rating <= 88:
-            low_min, low_max = 81, 83
-            mid_min = 84
-        else:
-            low_min, low_max = 84, 86
-            mid_min = 87
-
-    # Đọc cấu hình bảo vệ thẻ
+    """
+    Thuật toán giải SBC mới:
+    1. Chỉ chọn cầu thủ untradeable = true và evolution = false.
+    2. Min rating là 82.
+    3. Ưu tiên chọn cầu thủ sbc_storage = true.
+    4. Khởi đầu với sbc_size cầu thủ có rating thấp nhất.
+    5. Tuần tự tăng rating từng vị trí cho đến khi đạt target_rating - 0.5
+       hoặc đạt max rating của các thẻ trong sbc_storage.
+    """
+    target_rating = requirements.get("min_rating", 83)
+    sbc_size = requirements.get("size", 11)
+    
+    # 1. Đọc cấu hình bảo vệ thẻ
     protected_config = config.get("protected_cards", {})
     protect_active = protected_config.get("active_squad", True)
     protect_favorites = protected_config.get("favorites", True)
-    protect_evolutions = protected_config.get("evolutions", True)
     blacklist_ids = set(str(bid) for bid in protected_config.get("blacklist_ids", []))
-
-    print(f"[SOLVER] Mục tiêu: rating≥{min_rating}, rare≥{min_rare}, "
-          f"totw≥{min_totw_tots}, size={sbc_size}")
-    print(f"[SOLVER] Phạm vi rating dùng: {min_use_rating}–{max_use_rating}, "
-          f"blacklist={len(blacklist_ids)} IDs")
-
-    # 1. Lọc cầu thủ hợp lệ
+    
+    # 2. Lọc cầu thủ khả dụng
     valid_players = []
     for p in players:
         pid = str(p.get("id", ""))
@@ -370,160 +64,114 @@ def solve_sbc(players: list, requirements: dict, config: dict):
             continue
         if protect_favorites and p.get("favorite", False):
             continue
-        if protect_evolutions and p.get("evolution", False):
+        
+        # Chỉ chọn cầu thủ untradeable = true và evolution = false
+        untradeable_val = p.get("untradeable")
+        if untradeable_val not in (True, "true", "True"):
             continue
-
-        r = p.get("rating", 0)
-        # Nếu SBC rating == 89, bắt buộc chỉ dùng cầu thủ từ 84 trở lên (không được dùng thẻ 80-83)
-        if min_rating == 89 and r < 84:
+        
+        evolution_val = p.get("evolution")
+        if evolution_val in (True, "true", "True"):
             continue
-        if r < 80:
+        # Min rating là 82
+        if p.get("rating", 0) < 82:
             continue
+            
+        valid_players.append(p)
+        
+    # 3. Tính max rating của các thẻ trong sbc_storage
+    storage_ratings = [p["rating"] for p in valid_players if p.get("sbc_storage") == True]
+    if storage_ratings:
+        max_storage_rating = max(storage_ratings)
+    else:
+        # Nếu không có thẻ trong sbc_storage, lấy rating cao nhất của các cầu thủ khả dụng
+        max_storage_rating = max(p["rating"] for p in valid_players) if valid_players else 99
 
-        is_special = p.get("totw", False) or p.get("tots", False)
-        is_storage = p.get("sbc_storage", False)
-
-        if is_special or (is_storage and prioritize_sbc_storage):
-            valid_players.append(p)
-            continue
-
-        # Thẻ thường: phải nằm trong khoảng rating được phép dùng
-        if min_use_rating <= r <= max_use_rating:
-            valid_players.append(p)
-
-    if not valid_players:
-        print(f"[SOLVER ERROR] Không có cầu thủ khả dụng nào trong phạm vi rating {min_use_rating}–{max_use_rating}!")
-        return None
-
-    # 2. Tính chi phí ảo (Virtual Cost)
-
+    print(f"[SOLVER] Số cầu thủ khả dụng (Untradeable, Non-Evo, Rating>=82): {len(valid_players)}")
+    print(f"[SOLVER] Rating cao nhất trong SBC Storage khả dụng: {max_storage_rating if storage_ratings else 'N/A (Mặc định lấy max khả dụng: ' + str(max_storage_rating) + ')'}")
+    
+    # 4. Sắp xếp các cầu thủ khả dụng: tăng dần rating, ưu tiên sbc_storage = True trước
+    valid_players.sort(key=lambda p: (p["rating"], 0 if p.get("sbc_storage") else 1))
+    
+    # 5. Khởi tạo đội hình bằng sbc_size cầu thủ độc bản có rating thấp nhất
+    selected_solution = []
+    selected_def_ids = set()
+    pool = []
+    
     for p in valid_players:
-        is_storage = p.get("sbc_storage", False)
-        is_untradeable = p.get("untradeable", False)
-        r = p.get("rating", 80)
-        market_price = max(p.get("market_price", 1000), 400)
-
-        # A. Cận dưới động và dưới cận dưới động (r <= low_max): Không phân biệt tradeable/untradeable để tận dụng thẻ giá rẻ
-        if r <= low_max:
-            if is_storage and prioritize_sbc_storage:
-                if low_min <= r <= low_max:
-                    multiplier = 1.0 if min_rating >= 90 else 3.0
-                    p["cost"] = 5.0 + (r - low_min) * multiplier
-                else: # r < low_min
-                    p["cost"] = 200.0 + (low_min - r) * 5.0
-            else: # Club (cả tradeable và untradeable)
-                if low_min <= r <= low_max:
-                    multiplier = 1.5 if min_rating >= 90 else 5.0
-                    p["cost"] = 15.0 + (r - low_min) * multiplier
-                else: # r < low_min
-                    p["cost"] = 350.0 + (low_min - r) * 5.0
-            continue
-
-        # B. Các thẻ từ mid_min trở lên (r > low_max): Có phân biệt tradeable/untradeable để bảo vệ thẻ đắt
-        if is_storage and prioritize_sbc_storage:
-            if r >= min_rating:
-                # Cận trên Storage: Rất rẻ, tăng dần từ min_rating để ưu tiên chọn thẻ thấp hơn trước (tránh lãng phí thẻ siêu cao)
-                p["cost"] = 10.0 + (r - min_rating) * 2.0
+        p_def_id = p.get("definitionId", p.get("name", p.get("id")))
+        if len(selected_solution) < sbc_size:
+            if p_def_id not in selected_def_ids:
+                selected_solution.append(p)
+                selected_def_ids.add(p_def_id)
             else:
-                # Cận trung Storage (mid_min đến 92): Rất đắt để bảo tồn thẻ (lên tới 250 điểm)
-                p["cost"] = 250.0 - abs(r - 88) * 10.0
-        elif (is_untradeable or is_storage) and prioritize_untradeable:
-            if r >= min_rating:
-                # Cận trên Club Untradeable: Rẻ để sử dụng gánh team nếu thiếu Storage
-                p["cost"] = 50.0 + (r - min_rating) * 5.0
-            else:
-                # Cận trung Club (mid_min đến min_rating - 1): Cực kỳ đắt để tránh sử dụng
-                p["cost"] = 400.0 + (r - mid_min) * 20.0
+                pool.append(p)
         else:
-            # Club Tradeable: Đắt nhất để tránh lãng phí tài sản bán được
-            p["cost"] = market_price + 1000
-
-    # 2.5 Lọc bỏ trùng lặp
-    unique_players = {}
-    for p in valid_players:
-        def_id = p.get("definitionId", 0)
-        key = def_id if def_id > 0 else p.get("name", "Unknown")
-
-        if key not in unique_players:
-            unique_players[key] = p
+            pool.append(p)
+            
+    if len(selected_solution) < sbc_size:
+        print(f"[SOLVER WARNING] Không đủ cầu thủ khả dụng độc bản để điền đội hình! Cần {sbc_size}, chỉ có {len(selected_solution)}.")
+        is_complete = False
+    else:
+        # Kiểm tra xem đội hình xuất phát có đạt yêu cầu chưa (chấp nhận thấp hơn 0.5)
+        current_rating_float = calculate_sbc_rating_float([p["rating"] for p in selected_solution])
+        if current_rating_float >= target_rating - 0.5:
+            is_complete = True
+            print(f"[SOLVER] Đội hình ban đầu đạt yêu cầu rating: {current_rating_float:.2f} >= {target_rating - 0.5:.1f}")
         else:
-            if p["cost"] < unique_players[key]["cost"]:
-                unique_players[key] = p
-
-    valid_players = list(unique_players.values())
-    print(f"[SOLVER] Cầu thủ hợp lệ sau lọc trùng lặp: {len(valid_players)}/{len(players)}")
-
-    selected_players = None
-
-    # 3. Thử tìm nghiệm bằng FUT.GG Combinations Database (Chỉ áp dụng cho SBC rating thấp <87 để tránh lãng phí)
-    if sbc_size == 11 and min_rating < 87:
-        print("[SOLVER] Thử tìm nghiệm tối ưu từ FUT.GG Combinations Database...")
-        db_solution = solve_using_combinations(valid_players, min_rating, min_rare, min_totw_tots, sbc_size)
-        if db_solution:
-            # Ngăn chặn việc lãng phí: Rating thực tế không được vượt quá mục tiêu + 1
-            if db_solution["solved_rating"] <= min_rating + 1:
-                print(f"[SOLVER] ✅ Tìm thấy nghiệm tối ưu từ Combinations Database! (Rating thực tế đạt: {db_solution['solved_rating']})")
-                selected_players = db_solution["players"]
-            else:
-                print(f"[SOLVER] Bỏ qua combinations vì rating thực tế ({db_solution['solved_rating']}) quá cao so với mục tiêu ({min_rating}) gây lãng phí.")
-
-    # 4. Thử MILP Solver nếu database bị bỏ qua hoặc không tìm thấy nghiệm hợp lý
-    if not selected_players:
-        try:
-            import pulp
-            pulp_available = True
-        except ImportError:
-            pulp_available = False
-
-        if pulp_available:
-            print("[SOLVER] Đang chạy MILP Solver (PuLP)...")
-            selected_players = solve_sbc_milp(
-                valid_players, min_rating, min_rare, min_totw_tots, sbc_size
-            )
-            if selected_players:
-                print(f"[SOLVER] ✅ MILP tìm được nghiệm tối ưu.")
-
-    # 5. Thử Heuristic Fallback
-    if not selected_players:
-        players_by_rating = {}
-        for p in valid_players:
-            r = p["rating"]
-            if r not in players_by_rating:
-                players_by_rating[r] = []
-            players_by_rating[r].append(p)
-        for r in players_by_rating:
-            players_by_rating[r].sort(key=lambda p: p["cost"])
-
-        available_ratings = sorted(players_by_rating.keys())
-        search_ratings = [r for r in available_ratings if (min_rating - 8) <= r <= (min_rating + 5)]
-        if not search_ratings:
-            search_ratings = available_ratings
-
-        print(f"[SOLVER] Chạy heuristic với {len(search_ratings)} mức rating: {search_ratings}")
-        selected_players = solve_sbc_heuristic(
-            valid_players, min_rating, min_rare, min_totw_tots,
-            sbc_size, players_by_rating, search_ratings
-        )
-        if selected_players:
-            print(f"[SOLVER] ✅ Heuristic tìm được nghiệm.")
-
-    if not selected_players:
-        print("[SOLVER ERROR] Không tìm thấy nghiệm phù hợp nào!")
-        return None
-
-    # 6. Định dạng kết quả đầu ra
-    solved_rating = calculate_sbc_rating([p["rating"] for p in selected_players])
-    total_market_cost = sum(
-        p.get("market_price", 500)
-        for p in selected_players
-        if not p.get("sbc_storage", False) and not p.get("untradeable", False)
-    )
-
+            is_complete = False
+            # 6. Tuần tự tăng rating từng cầu thủ ở vị trí i
+            for i in range(sbc_size):
+                while True:
+                    current_player = selected_solution[i]
+                    current_r = current_player["rating"]
+                    
+                    # Tìm candidates trong pool: rating lớn hơn current_r và <= max_storage_rating
+                    # Chỉ chọn ứng viên có definitionId không trùng với bất kỳ vị trí khác trong đội hình
+                    selected_def_ids_without_current = {
+                        p.get("definitionId", p.get("name", p.get("id"))) for idx, p in enumerate(selected_solution) if idx != i
+                    }
+                    
+                    candidates = []
+                    for p in pool:
+                        if p["rating"] > current_r and p["rating"] <= max_storage_rating:
+                            p_def_id = p.get("definitionId", p.get("name", p.get("id")))
+                            if p_def_id not in selected_def_ids_without_current:
+                                candidates.append(p)
+                            
+                    if not candidates:
+                        break
+                        
+                    # Sắp xếp candidates: tăng dần rating, ưu tiên sbc_storage = True
+                    candidates.sort(key=lambda p: (p["rating"], 0 if p.get("sbc_storage") else 1))
+                    p_new = candidates[0]
+                    
+                    # Thực hiện hoán đổi
+                    pool.remove(p_new)
+                    pool.append(current_player)
+                    selected_solution[i] = p_new
+                    
+                    # Tính toán lại rating
+                    current_rating_float = calculate_sbc_rating_float([p["rating"] for p in selected_solution])
+                    if current_rating_float >= target_rating - 0.5:
+                        is_complete = True
+                        break
+                
+                if is_complete:
+                    print(f"[SOLVER] Đạt yêu cầu rating sau khi tăng vị trí {i+1}: {current_rating_float:.2f} >= {target_rating - 0.5:.1f}")
+                    break
+                    
+    # Sắp xếp lại selected_solution cho đẹp mắt trước khi trả về (theo rating giảm dần)
+    selected_solution.sort(key=lambda p: p["rating"], reverse=True)
+    
+    solved_rating = calculate_sbc_rating([p["rating"] for p in selected_solution])
+    
     result = {
         "sbc_name": requirements.get("name", "SBC Challenge"),
-        "target_rating": min_rating,
+        "target_rating": target_rating,
         "solved_rating": solved_rating,
-        "total_cost": total_market_cost,
+        "total_cost": 0, # Vì chỉ dùng untradeable nên cost là 0
+        "is_complete": is_complete,
         "players": [
             {
                 "id": p["id"],
@@ -536,20 +184,17 @@ def solve_sbc(players: list, requirements: dict, config: dict):
                 "sbc_storage": p.get("sbc_storage", False),
                 "untradeable": p.get("untradeable", False)
             }
-            for p in selected_players
+            for p in selected_solution
         ]
     }
-
     return result
 
-
 # =============================================================================
-# PHẦN 5: TEST OFFLINE VỚI FILE CSV
+# TEST OFFLINE VỚI FILE CSV
 # =============================================================================
 
 if __name__ == "__main__":
     import csv
-    import os
     import sys
 
     if hasattr(sys.stdout, 'reconfigure'):
@@ -557,8 +202,7 @@ if __name__ == "__main__":
     if hasattr(sys.stderr, 'reconfigure'):
         sys.stderr.reconfigure(encoding='utf-8')
 
-    print("[SOLVER TEST] Chạy test solver với file club-analyzer-2.csv...")
-    # Tự động định vị file CSV tương đối theo thư mục của file script
+    print("[SOLVER TEST] Chạy test solver mới với file club-analyzer-2.csv...")
     SRC_DIR = os.path.dirname(os.path.abspath(__file__))
     SOLVE_DIR = os.path.dirname(SRC_DIR)
     csv_path = os.path.join(SOLVE_DIR, "Database", "club-analyzer-2.csv")
@@ -590,30 +234,31 @@ if __name__ == "__main__":
 
         print(f"[SOLVER TEST] Đã load {len(mock_players)} cầu thủ từ CSV.\n")
 
-        # --- Test 1: SBC 83+ với 2 Rare ---
+        # --- Test 1: SBC 83+ với size 11 ---
         print("=" * 50)
-        print("TEST 1: SBC 83+ Player Pick (min_rating=83, min_rare=2)")
-        reqs_1 = {"name": "83+ Player Pick", "min_rating": 83, "min_rare": 2, "min_totw_tots": 0, "size": 11}
-        cfg_1  = {"min_rating_to_use": 80, "max_rating_to_use": 85, "blacklist_ids": []}
+        print("TEST 1: SBC 83+ (min_rating=83, size=11)")
+        reqs_1 = {"name": "83+ Upgrade", "min_rating": 83, "size": 11}
+        cfg_1  = {"protected_cards": {"active_squad": True, "favorites": True, "evolutions": True, "blacklist_ids": []}}
         result_1 = solve_sbc(mock_players, reqs_1, cfg_1)
         if result_1:
-            print(f"✅ Thành công! Rating: {result_1['solved_rating']} (Mục tiêu: {result_1['target_rating']})")
+            status_str = "ĐẦY ĐỦ" if result_1["is_complete"] else "THIẾU THẺ"
+            print(f"✅ Kết quả: {status_str}! Rating: {result_1['solved_rating']} (Mục tiêu: {result_1['target_rating']})")
             for i, p in enumerate(result_1["players"]):
-                tags = (" [STORAGE]" if p["sbc_storage"] else "") + (" [RARE]" if p["rare"] else "")
+                tags = (" [STORAGE]" if p["sbc_storage"] else "") + (" [UNTRADEABLE]" if p["untradeable"] else "")
                 print(f"  {i+1:2}. [{p['rating']}] {p['name']}{tags}")
         else:
             print("❌ Không tìm được nghiệm.")
 
-        # --- Test 2: SBC 84+ với 1 TOTW ---
-        print("\n" + "=" * 50)
-        print("TEST 2: SBC 84+ với 1 TOTW (min_rating=84, min_totw_tots=1)")
-        reqs_2 = {"name": "84+ TOTW", "min_rating": 84, "min_rare": 0, "min_totw_tots": 1, "size": 11}
-        cfg_2  = {"min_rating_to_use": 80, "max_rating_to_use": 86, "blacklist_ids": []}
-        result_2 = solve_sbc(mock_players, reqs_2, cfg_2)
+        # --- Test 2: SBC 90+ với size 11 ---
+        print("=" * 50)
+        print("TEST 2: SBC 90+ (min_rating=90, size=11)")
+        reqs_2 = {"name": "90+ Upgrade", "min_rating": 90, "size": 11}
+        result_2 = solve_sbc(mock_players, reqs_2, cfg_1)
         if result_2:
-            print(f"✅ Thành công! Rating: {result_2['solved_rating']} (Mục tiêu: {result_2['target_rating']})")
+            status_str = "ĐẦY ĐỦ" if result_2["is_complete"] else "THIẾU THẺ"
+            print(f"✅ Kết quả: {status_str}! Rating: {result_2['solved_rating']} (Mục tiêu: {result_2['target_rating']})")
             for i, p in enumerate(result_2["players"]):
-                tags = (" [STORAGE]" if p["sbc_storage"] else "") + (" [TOTW]" if p["totw"] else "") + (" [RARE]" if p["rare"] else "")
+                tags = (" [STORAGE]" if p["sbc_storage"] else "") + (" [UNTRADEABLE]" if p["untradeable"] else "")
                 print(f"  {i+1:2}. [{p['rating']}] {p['name']}{tags}")
         else:
             print("❌ Không tìm được nghiệm.")

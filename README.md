@@ -57,3 +57,8 @@ python .agents/skills/fc_sbc_bot/main.py
 2. **Nếu là lần đầu chạy:** Hãy thực hiện đăng nhập thủ công vào tài khoản EA của bạn, vượt qua xác thực bảo mật 2 lớp (2FA) nếu có. Trình duyệt sẽ lưu lại phiên đăng nhập của bạn vào thư mục `chrome_profile` (thư mục này đã được đưa vào `.gitignore` để không bị lộ lên GitHub).
 3. Sau khi đã đăng nhập thành công và nhìn thấy màn hình trang chủ Web App, hãy quay lại cửa sổ Terminal đang chạy bot và nhấn phím **Enter** để kích hoạt bot chạy tự động.
 4. Bot sẽ tự động nhúng PaleTools, thực hiện giải các SBC bạn đã cấu hình và tự động mở pack.
+
+
+## Câu lệnh chạy bot
+1. Trên MACOS:
+cd "/Users/binhnguyenthanh/Documents/FC Ultimate/.agents/skills/fc_sbc_bot" && python3 main.py

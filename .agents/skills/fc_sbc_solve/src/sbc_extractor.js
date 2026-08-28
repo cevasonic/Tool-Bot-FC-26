@@ -144,7 +144,11 @@ window.sbcSolveExtractor = {
 
         let isEvolution = false;
         try {
-            isEvolution = typeof item.isEvolution === 'function' ? item.isEvolution() : (item.isEvolution || false);
+            isEvolution = (typeof item.isEvolution === 'function' ? item.isEvolution() : (item.isEvolution || false))
+                || (item.evolutionId != null && item.evolutionId !== 0 && item.evolutionId !== '')
+                || (item.evolutionFlags != null && item.evolutionFlags !== 0)
+                || (item.evolutionStatus != null && item.evolutionStatus !== 0)
+                || (item.evolution !== undefined && item.evolution !== null && item.evolution !== false);
         } catch(e) {}
 
         let isFavorite = false;

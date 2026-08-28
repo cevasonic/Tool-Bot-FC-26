@@ -308,10 +308,19 @@ def monitor_sbc_solver(page, config: dict):
             
             # Dump debug inputs
             try:
+                debug_data = {"players": players, "requirements": requirements, "config": sbc_config}
+                
                 debug_path = os.path.join(SOLVE_DIR, "logs", "debug_run.json")
                 with open(debug_path, "w", encoding="utf-8") as df:
-                    json.dump({"players": players, "requirements": requirements, "config": sbc_config}, df, ensure_ascii=False, indent=2)
+                    json.dump(debug_data, df, ensure_ascii=False, indent=2)
                 print(f"[SOLVER MANAGER] Đã ghi debug inputs vào: {debug_path}")
+                
+                database_dir = os.path.join(SOLVE_DIR, "Database")
+                os.makedirs(database_dir, exist_ok=True)
+                club_data_path = os.path.join(database_dir, "club-data.json")
+                with open(club_data_path, "w", encoding="utf-8") as df:
+                    json.dump(debug_data, df, ensure_ascii=False, indent=2)
+                print(f"[SOLVER MANAGER] Đã ghi dữ liệu cầu thủ vào: {club_data_path}")
             except Exception as df_err:
                 print(f"[SOLVER MANAGER WARNING] Không thể ghi debug inputs: {df_err}")
 
@@ -326,7 +335,8 @@ def monitor_sbc_solver(page, config: dict):
                 update_button_status(page, "❌ NO SOLUTION", "#ff9f1c")
                 time.sleep(3); reset_button(page); continue
 
-            print(f"[SOLVER MANAGER SUCCESS] ✅ Rating đạt: {result['solved_rating']} (mục tiêu ≥{result['target_rating']})")
+            status_str = "ĐẦY ĐỦ" if result.get("is_complete", True) else "THIẾU THẺ"
+            print(f"[SOLVER MANAGER SUCCESS] ✅ [{status_str}] Rating đạt: {result['solved_rating']} (mục tiêu ≥{result['target_rating']})")
             for i, p in enumerate(result["players"]):
                 tags = ("" + (" [STORAGE]" if p.get("sbc_storage") else "")
                            + (" [RARE]"    if p.get("rare")        else "")
@@ -344,7 +354,10 @@ def monitor_sbc_solver(page, config: dict):
             if fill_res and fill_res.get("success"):
                 filled = fill_res.get("filled", 0)
                 print(f"[SOLVER MANAGER] ✅ Điền thành công {filled}/{len(player_ids)} cầu thủ!")
-                update_button_status(page, f"✅ DONE! ({filled})", "#00f5d4")
+                if not result.get("is_complete", True):
+                    update_button_status(page, f"⚠️ THIẾU THẺ ({filled})", "#ff9f1c")
+                else:
+                    update_button_status(page, f"✅ DONE! ({filled})", "#00f5d4")
             else:
                 fill_err = fill_res.get("error", "?") if fill_res else "None"
                 print(f"[SOLVER MANAGER ERROR] Fill thất bại: {fill_err}")

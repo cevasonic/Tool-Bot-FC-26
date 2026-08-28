@@ -1,5 +1,5 @@
 import time
-from src.utils import sleep_human_like
+from src.utils import sleep_human_like, wait_for_click_shield
 from src.paletools import trigger_bot_pause, check_pause
 
 def check_unassigned_badge_and_clear(page, config):
@@ -84,12 +84,6 @@ def handle_unassigned_items(page, config):
     wait_for_unassigned_screen(page, timeout_ms=15000)
     time.sleep(1.5)
     
-    # 1. Thử gửi vật phẩm không trùng lặp vào Club bằng phím Space (Shortcut của PaleTools)
-    print("[RPA] Thử gửi vật phẩm không trùng vào Club (nhấn Space)...")
-    page.keyboard.press("Space")
-    time.sleep(1.5)
-    
-    # 2. Xử lý các cầu thủ trùng lặp (Duplicates) gửi vào SBC Storage
     storage_buttons = [
         "button:has-text('SBC Storage')",
         "button:has-text('Send Duplicates to SBC Storage')",
@@ -110,17 +104,36 @@ def handle_unassigned_items(page, config):
         "button:has-text('Send to Club')",
         "button:has-text('Lưu trữ tất cả')"
     ]
-    
-    # Thử click nút SBC Storage trước
-    for selector in storage_buttons:
+
+    max_cleanup_attempts = 4
+    for attempt in range(1, max_cleanup_attempts + 1):
+        print(f"[RPA] Đang tiến hành dọn dẹp vật phẩm unassigned (Lần thử {attempt}/{max_cleanup_attempts})...")
+        
+        is_unassigned_visible = False
         try:
-            locators = page.locator(selector).all()
-            for loc in locators:
+            if page.locator(".ut-unassigned-view, .unassigned-view").first.is_visible():
+                is_unassigned_visible = True
+        except Exception:
+            pass
+            
+        if not is_unassigned_visible:
+            print("[OK] Màn hình unassigned không còn hiển thị. Chuyển sang bước tiếp theo.")
+            break
+            
+        # 1. Thử gửi vật phẩm không trùng lặp vào Club bằng phím Space (Shortcut của PaleTools)
+        print("[RPA] Nhấn Space để gửi vật phẩm không trùng vào Club...")
+        page.keyboard.press("Space")
+        wait_for_click_shield(page)
+        
+        # 2. Xử lý các cầu thủ trùng lặp (Duplicates) gửi vào SBC Storage
+        for selector in storage_buttons:
+            try:
+                loc = page.locator(selector).first
                 if loc.is_visible():
                     btn_text = loc.text_content().strip() if loc.text_content() else ""
                     print(f"[RPA] Tìm thấy nút gửi duplicate: '{btn_text}'. Đang click...")
                     loc.click()
-                    time.sleep(1.5)
+                    wait_for_click_shield(page)
                     
                     # Kiểm tra xem có hộp thoại xác nhận (dialog) xuất hiện không
                     try:
@@ -136,49 +149,57 @@ def handle_unassigned_items(page, config):
                             if c_btn.is_visible():
                                 print(f"[RPA] Tìm thấy hộp thoại xác nhận, click '{c_btn.text_content().strip()}'...")
                                 c_btn.click()
-                                time.sleep(1.0)
+                                wait_for_click_shield(page)
                                 break
                     except Exception:
                         pass
                     break
-        except Exception:
-            pass
-            
-    # Thử click nút Store All để gửi các vật phẩm còn lại vào Club
-    for selector in club_buttons:
-        try:
-            locators = page.locator(selector).all()
-            for loc in locators:
+            except Exception:
+                pass
+                
+        # 3. Thử click nút Store All để gửi các vật phẩm còn lại vào Club
+        for selector in club_buttons:
+            try:
+                loc = page.locator(selector).first
                 if loc.is_visible():
                     btn_text = loc.text_content().strip() if loc.text_content() else ""
                     print(f"[RPA] Tìm thấy nút Store All: '{btn_text}'. Đang click...")
                     loc.click()
-                    time.sleep(1.5)
-                    break
-        except Exception:
-            pass
-            
-    # Cuối cùng, thử nhấn Space một lần nữa để dọn dẹp nốt nếu còn sót
-    page.keyboard.press("Space")
-    time.sleep(1.0)
-    
-    # VÒNG LẶP CHỜ: Đợi cho đến khi không còn nút thao tác nào hiển thị trên UI (xác nhận dọn dẹp sạch unassigned)
-    print("[RPA] Đang chờ xác nhận việc dọn dẹp vật phẩm unassigned hoàn tất...")
-    cleanup_timeout = 8.0
-    start_cleanup = time.time()
-    while time.time() - start_cleanup < cleanup_timeout:
-        any_visible = False
-        for selector in storage_buttons + club_buttons:
-            try:
-                if page.locator(selector).first.is_visible():
-                    any_visible = True
+                    wait_for_click_shield(page)
                     break
             except Exception:
                 pass
-        if not any_visible:
+                
+        # 4. Gửi các vật phẩm không trùng lặp còn sót bằng Space lần nữa
+        print("[RPA] Nhấn Space lần nữa để dọn dẹp các vật phẩm không trùng lặp còn sót...")
+        page.keyboard.press("Space")
+        wait_for_click_shield(page)
+        
+        # 5. Kiểm tra xem đã sạch hẳn unassigned chưa
+        any_button_visible = False
+        for selector in storage_buttons + club_buttons:
+            try:
+                if page.locator(selector).first.is_visible():
+                    any_button_visible = True
+                    break
+            except Exception:
+                pass
+                
+        # Kiểm tra xem trên màn hình còn hiển thị thẻ cầu thủ unassigned nào không
+        has_items = False
+        try:
+            items_count = page.locator(".ut-unassigned-view .list-item, .unassigned-view .list-item, .ut-unassigned-view .tile, .unassigned-view .tile").count()
+            if items_count > 0:
+                has_items = True
+        except Exception:
+            pass
+            
+        if not any_button_visible and not has_items:
             print("[OK] Đã hoàn thành dọn dẹp vật phẩm unassigned thành công!")
             break
-        time.sleep(0.5)
+        else:
+            print(f"[INFO] Vẫn còn nút thao tác hoặc thẻ unassigned trên màn hình. Sẽ thử lại ở lượt sau. (Nút: {any_button_visible}, Thẻ: {has_items})")
+            time.sleep(1.0)
     
     # 主動 quay lại My Packs bằng phím tắt "1" của PaleTools
     try:
