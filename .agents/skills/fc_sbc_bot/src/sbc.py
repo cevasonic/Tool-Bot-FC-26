@@ -720,13 +720,43 @@ def execute_sbc_step(page, config, paletools_js, sbc_name, max_repeats, complete
                 is_finished = False
                 break
                 
+            # Kiểm tra lỗi softban/submit cụ thể qua thông báo toast hoặc dialog
+            is_softban_toast = False
+            try:
+                sb_toast_el = page.locator(".toast, .notification, [class*='toast'], [class*='notification'], .ut-toast, .ut-notification-bar, .ea-dialog-view, .dialog-modal").filter(has_text=re.compile(r'(Failed to submit|Error submitting|cannot be submitted|Không thể gửi|Gửi thất bại|yêu cầu không thể hoàn thành)', re.IGNORECASE)).first
+                if sb_toast_el.count() > 0 and sb_toast_el.is_visible():
+                    is_softban_toast = True
+                    print(f"[WARNING] Phát hiện Toast/Dialog lỗi nghi ngờ Softban: '{sb_toast_el.text_content().strip()}'.")
+            except Exception:
+                pass
+
+            if is_softban_toast:
+                msg = "⚠️ Phát hiện lỗi gửi SBC (có thể bị Softban giới hạn submit của EA). Bot sẽ tự động tạm dừng chạy trong 30 phút để nghỉ ngơi..."
+                print(f"\n[SOFTBAN DETECTED] {msg}\n")
+                from src.notification import send_telegram_message
+                send_telegram_message(config, msg)
+                for i in range(30):
+                    print(f"[SOFTBAN COOLDOWN] Đang nghỉ ngơi: phút thứ {i+1}/30...")
+                    sleep_human_like(60, 60, page)
+                print("[SOFTBAN COOLDOWN] Hết thời gian chờ softban. Tiến hành reload trang để tự khôi phục...")
+                from src.utils import recover_from_crash
+                recover_from_crash(page, config, paletools_js)
+                consecutive_errors = 0
+                continue
+
             # Nếu không phải thiếu thẻ (lỗi lag mạng hoặc kẹt thông thường)
             print(f"[WARNING] Lượt {sbc_count + 1} chưa được submit thành công (lag mạng hoặc lỗi kẹt).")
             consecutive_errors += 1
             if consecutive_errors >= 3:
-                print("[ERROR] Quá nhiều lỗi submit liên tiếp. Dừng bước SBC này.")
-                is_finished = False
-                break
+                msg = f"⚠️ Gặp lỗi submit liên tiếp {consecutive_errors} lần. Tiến hành tự động reload trang và nghỉ 5 phút trước khi thử lại..."
+                print(f"\n[SUBMIT ERROR LIMIT] {msg}\n")
+                from src.notification import send_telegram_message
+                send_telegram_message(config, msg)
+                from src.utils import recover_from_crash
+                recover_from_crash(page, config, paletools_js)
+                sleep_human_like(300, 300, page)
+                consecutive_errors = 0
+                continue
             continue
             
         # 4. Submit thành công

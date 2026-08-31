@@ -15,11 +15,25 @@ def sleep_human_like(min_sec, max_sec, page=None):
     global GLOBAL_ACTIVE_PAGE
     # Import cục bộ để tránh import vòng tròn
     from src.paletools import check_pause
+    from src.config import get_config
+    from src.notification import process_telegram_updates
     
+    config = get_config()
     active_page = page or GLOBAL_ACTIVE_PAGE
     delay = random.uniform(min_sec, max_sec)
     start_time = time.time()
+    last_tg_check = 0.0
+    
     while time.time() - start_time < delay:
+        current_time = time.time()
+        # Kiểm tra tin nhắn Telegram định kỳ mỗi 1.5 giây
+        if config and (current_time - last_tg_check >= 1.5):
+            try:
+                process_telegram_updates(config)
+            except Exception:
+                pass
+            last_tg_check = current_time
+            
         if active_page:
             try:
                 check_pause(active_page)
@@ -75,27 +89,81 @@ def dismiss_modals(page):
 
 def check_captcha_or_errors(page, config):
     # Check for captcha or EA dialog
+    import re
     captcha_selectors = [
         "iframe[src*='arkoselabs']", 
         ".ea-dialog-view:has-text('Verification')", 
         ".ea-dialog-view:has-text('Security Challenge')",
-        ".ea-dialog-view:has-text('Captcha')"
+        ".ea-dialog-view:has-text('Captcha')",
+        ".ea-dialog-view:has-text('Xác minh')",
+        ".ea-dialog-view:has-text('Thử thách bảo mật')"
     ]
     
     is_captcha_detected = False
     for selector in captcha_selectors:
         try:
-            if page.locator(selector).count() > 0:
+            loc = page.locator(selector).first
+            if loc.count() > 0 and loc.is_visible():
                 is_captcha_detected = True
                 break
         except Exception:
             pass
             
     if is_captcha_detected:
-        alert_user_error(page, config, "Captcha detected from EA Web App!")
-        print("\n[PAUSED] Please solve captcha in Chrome browser. Once done, press [ENTER] here to continue...")
-        input()
-        print("[INFO] Resuming...")
+        alert_user_error(page, config, "🔴 PHÁT HIỆN CAPTCHA XÁC MINH từ EA Web App!")
+        print("\n" + "="*60)
+        print("[CAPTCHA DETECTED] Vui lòng giải Captcha trên trình duyệt Chrome.")
+        print("Bot sẽ tự động tiếp tục sau khi Captcha được giải xong.")
+        print("Hoặc bạn có thể chat /resume trên Telegram để bỏ qua cưỡng bức.")
+        print("="*60 + "\n")
+        
+        last_tg_check = 0.0
+        while True:
+            # 1. Kiểm tra xem Captcha còn hiển thị trên UI không
+            still_captcha = False
+            for selector in captcha_selectors:
+                try:
+                    loc = page.locator(selector).first
+                    if loc.count() > 0 and loc.is_visible():
+                        still_captcha = True
+                        break
+                except Exception:
+                    pass
+            
+            if not still_captcha:
+                print("[OK] Đã giải xong Captcha hoặc Captcha biến mất khỏi giao diện. Tự động tiếp tục...")
+                from src.notification import send_telegram_message
+                send_telegram_message(config, "🟢 Captcha đã được giải quyết xong. Bot tự động chạy tiếp...")
+                # Reset trạng thái về running nếu trước đó có bị set paused
+                try:
+                    page.evaluate("sessionStorage.setItem('bot_status', 'running')")
+                except Exception:
+                    pass
+                break
+                
+            # 2. Kiểm tra tin nhắn Telegram định kỳ mỗi 2 giây
+            import time
+            current_time = time.time()
+            if current_time - last_tg_check >= 2.0:
+                try:
+                    from src.notification import process_telegram_updates
+                    process_telegram_updates(config)
+                except Exception:
+                    pass
+                last_tg_check = current_time
+                
+            # 3. Kiểm tra xem người dùng có cưỡng bức chuyển trạng thái bot về running qua Telegram không
+            try:
+                is_running = page.evaluate("sessionStorage.getItem('bot_status') === 'running'")
+                if is_running:
+                    print("[INFO] Nhận được lệnh bỏ qua Captcha từ Telegram. Tiếp tục...")
+                    break
+            except Exception:
+                pass
+                
+            time.sleep(1.0)
+            
+        print("[INFO] Tiếp tục chạy bot...")
         sleep_human_like(2.0, 3.0, page)
 
 def recover_from_crash(page, config, paletools_js):

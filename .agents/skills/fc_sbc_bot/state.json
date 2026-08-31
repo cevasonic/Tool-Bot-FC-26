@@ -1,27 +1,7 @@
 {
-  "date": "2026-08-23",
-  "completed_sbcs": {
-    "Daily Bronze Upgrade": 14,
-    "Daily Silver Upgrade": 15,
-    "Bronze Upgrade": 12,
-    "Daily Common Gold Upgrade": 6,
-    "Silver Upgrade": 7,
-    "Daily Rare Gold Upgrade": 14,
-    "1 of 5 84+ Player Pick": 65
-  },
-  "opened_packs": {
-    "BRONZE PLAYERS PREMIUM": 13,
-    "SILVER PLAYERS PREMIUM": 2,
-    "x2 Silver Players Pack": 12,
-    "x3 Common Gold Players Pack": 7,
-    "5x Max. 78 Rare Gold Players Pack": 15,
-    "Provisions Pack": 12
-  },
-  "context_vars": {
-    "bronze_success_count": 14,
-    "silver_success_count": 13
-  },
-  "steps_finished": {
-    "0": false
-  }
+  "date": "",
+  "completed_sbcs": {},
+  "opened_packs": {},
+  "context_vars": {},
+  "steps_finished": {}
 }

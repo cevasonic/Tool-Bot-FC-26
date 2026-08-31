@@ -182,6 +182,7 @@ def check_pause(page):
             }""")
 
         printed = False
+        last_tg_check = 0.0
         while True:
             if check_keyboard_toggle():
                 page.evaluate("""() => {
@@ -215,6 +216,19 @@ def check_pause(page):
                 print("="*60 + "\n")
                 printed = True
                 
+            # Kiểm tra tin nhắn Telegram định kỳ mỗi 1.5 giây khi tạm dừng
+            current_time = time.time()
+            if current_time - last_tg_check >= 1.5:
+                try:
+                    from src.config import get_config
+                    from src.notification import process_telegram_updates
+                    config = get_config()
+                    if config:
+                        process_telegram_updates(config)
+                except Exception:
+                    pass
+                last_tg_check = current_time
+                
             time.sleep(0.5)
             
         if printed:
@@ -223,8 +237,80 @@ def check_pause(page):
     except Exception as e:
         print(f"[WARNING] Lỗi trong check_pause: {e}")
 
-def trigger_bot_pause(page, reason):
+def trigger_bot_pause(page, reason, config=None):
     print(f"\n[ALERT] KÍCH HOẠT TẠM DỪNG BOT TỰ ĐỘNG! Lý do: {reason}")
+    
+    # Thử lấy số lượng cầu thủ trong SBC Storage qua JS của Web App
+    sbc_storage_count = None
+    try:
+        sbc_storage_count = page.evaluate("""() => {
+            return new Promise((resolve) => {
+                if (typeof services === 'undefined' || !services.Item || typeof services.Item.searchStorageItems !== 'function') {
+                    try {
+                        let storageRepo = repositories.Item.storage;
+                        if (storageRepo && typeof storageRepo.values === 'function') {
+                            resolve(Array.from(storageRepo.values()).filter(i => i && (i.type === 'player' || (i.isPlayer && i.isPlayer()))).length);
+                        } else if (repositories.Item.getStorageItems) {
+                            let si = repositories.Item.getStorageItems() || [];
+                            resolve(si.filter(i => i && (i.type === 'player' || (i.isPlayer && i.isPlayer()))).length);
+                        } else {
+                            resolve(0);
+                        }
+                    } catch(e) { resolve(0); }
+                    return;
+                }
+                try {
+                    let criteria = new UTSearchCriteriaDTO();
+                    criteria.type = SearchType && SearchType.PLAYER ? SearchType.PLAYER : 'player';
+                    criteria.count = 250;
+                    criteria.offset = 0;
+                    let obs = services.Item.searchStorageItems(criteria);
+                    obs.observe(window, function(observer, response) {
+                        if (response && response.success && response.response && response.response.items) {
+                            let count = response.response.items.filter(i => i && (i.type === 'player' || (i.isPlayer && i.isPlayer()))).length;
+                            resolve(count);
+                        } else {
+                            resolve(0);
+                        }
+                    });
+                } catch(e) { resolve(0); }
+            });
+        }""")
+    except Exception as e:
+        print(f"[WARNING] Không thể lấy số lượng cầu thủ trong SBC Storage: {e}")
+
+    sbc_storage_info = ""
+    if sbc_storage_count is not None:
+        sbc_storage_info = f"\nSố lượng cầu thủ trong SBC Storage hiện tại: {sbc_storage_count}/100"
+        print(f"[INFO] {sbc_storage_info.strip()}")
+        
+    # Gửi thông báo Telegram nếu cấu hình cho phép
+    try:
+        if config is None:
+            config_path = os.path.join(BASE_DIR, "config.json")
+            if os.path.exists(config_path):
+                with open(config_path, "r", encoding="utf-8") as f:
+                    config = json.load(f)
+        
+        if config:
+            # Chụp màn hình khi tạm dừng để gửi kèm Telegram
+            screenshot_path = os.path.join(BASE_DIR, "logs", "pause_screenshot.png")
+            try:
+                os.makedirs(os.path.dirname(screenshot_path), exist_ok=True)
+                page.screenshot(path=screenshot_path)
+            except Exception as se:
+                print(f"[WARNING] Không thể chụp ảnh màn hình khi tạm dừng: {se}")
+                screenshot_path = None
+                
+            from src.notification import send_telegram_message
+            send_telegram_message(
+                config, 
+                f"KÍCH HOẠT TẠM DỪNG BOT TỰ ĐỘNG!\nLý do: {reason}{sbc_storage_info}", 
+                photo_path=screenshot_path
+            )
+    except Exception as te:
+        print(f"[WARNING] Không thể gửi thông báo tạm dừng Telegram: {te}")
+
     try:
         page.evaluate("""() => {
             sessionStorage.setItem("bot_status", "paused");
@@ -252,3 +338,23 @@ def trigger_bot_pause(page, reason):
             
     except Exception as e:
         print(f"[WARNING] Không thể kích hoạt nút tạm dừng qua JS: {e}")
+
+def resume_bot_status(page):
+    try:
+        page.evaluate("""() => {
+            sessionStorage.setItem("bot_status", "running");
+            let btn = document.getElementById('bot-pause-btn');
+            let statusText = document.getElementById('bot-status-text');
+            if (btn) {
+                btn.setAttribute('data-status', 'running');
+                btn.innerText = 'TẠM DỪNG (Pause)';
+                btn.style.background = '#ff3366';
+                btn.style.color = '#fff';
+            }
+            if (statusText) {
+                statusText.innerText = 'Đang chạy...';
+                statusText.style.color = '#00ff88';
+            }
+        }""")
+    except Exception as e:
+        print(f"[WARNING] Không thể cập nhật trạng thái hoạt động qua JS: {e}")
