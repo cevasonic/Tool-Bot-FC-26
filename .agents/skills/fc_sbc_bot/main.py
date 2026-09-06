@@ -149,14 +149,34 @@ def run():
                 import re
                 
                 while not selected_workflow:
+                    # 1. Kiểm tra Console input
+                    from src.notification import get_console_input, process_telegram_updates
+                    c_in = get_console_input(timeout=0.1)
+                    if c_in:
+                        nums = [int(s) for s in re.findall(r'\d+', c_in)]
+                        if nums:
+                            valid = True
+                            invalid_num = None
+                            for n in nums:
+                                if n not in step_map:
+                                    valid = False
+                                    invalid_num = n
+                                    break
+                            if valid:
+                                for n in nums:
+                                    selected_workflow.append(step_map[n])
+                                print(f"[OK] Đã chọn workflow thành công từ console: {[n for n in nums]}")
+                                break
+                            else:
+                                print(f"[WARNING] Số bước `{invalid_num}` không hợp lệ hoặc không có trong danh sách khả dụng. Vui lòng thử lại!")
+
                     # Log định kỳ trên console
                     if time.time() - last_log_time >= 15.0:
-                        print("[WORKFLOW SELECT] Đang chờ bạn phản hồi danh sách bước chạy từ Telegram...")
+                        print("[WORKFLOW SELECT] Đang chờ bạn phản hồi danh sách bước chạy từ Telegram hoặc Console...")
                         last_log_time = time.time()
                         
-                    # Quét Telegram updates
+                    # 2. Quét Telegram updates
                     try:
-                        from src.notification import process_telegram_updates
                         tg_choices = process_telegram_updates(config)
                         for tc in tg_choices:
                             # Parse chuỗi nhận được (Ví dụ: "15, 16, 17")
@@ -176,7 +196,7 @@ def run():
                                     # Tạo workflow mới dựa trên thứ tự các bước được chọn
                                     for n in nums:
                                         selected_workflow.append(step_map[n])
-                                    print(f"[OK] Đã chọn workflow thành công: {[n for n in nums]}")
+                                    print(f"[OK] Đã chọn workflow thành công từ Telegram: {[n for n in nums]}")
                                     break
                                 else:
                                     err_msg = f"⚠️ Số bước `{invalid_num}` không hợp lệ hoặc không có trong danh sách khả dụng. Vui lòng thử lại!"
@@ -185,10 +205,13 @@ def run():
                     except Exception as e:
                         print(f"[WARNING] Lỗi khi quét Telegram updates trong quy trình chọn workflow: {e}")
                         
-                    time.sleep(1.5)
+                    time.sleep(1.0)
                     
                 # Gán workflow được chọn vào cấu hình chạy
                 workflow = selected_workflow
+                from src.config import set_active_workflow, set_current_step_info, set_current_step_index
+                set_active_workflow(workflow, 0)
+                
                 # Ghi nhận log workflow cuối cùng lên Telegram
                 selected_steps_str = " -> ".join([str(s.get("step")) for s in workflow])
                 confirm_msg = f"✅ Thiết lập thành công! Bot sẽ bắt đầu chạy chuỗi workflow: [{selected_steps_str}]."
@@ -220,8 +243,13 @@ def run():
                     
                     any_sbc_made_progress = False
                     session_lost = False
+                    step_idx = 0
                     
-                    for idx, step_cfg in enumerate(workflow):
+                    while step_idx < len(workflow):
+                        idx = step_idx
+                        set_current_step_index(idx)
+                        step_cfg = workflow[idx]
+                        
                         # Kiểm tra session trước khi bắt đầu mỗi bước
                         if not is_session_active(page):
                             alert_user_error(page, config, "Session bị ngắt kết nối hoặc hết hạn (bị chuyển hướng về trang auth.html).")
@@ -232,13 +260,19 @@ def run():
                         step_num = step_cfg.get("step", "N/A")
                         step_type = step_cfg.get("type")
                         
+                        # Đồng bộ steps_finished từ daily_state (nếu có bổ sung bước từ unassigned)
+                        steps_finished = daily_state.get("steps_finished", steps_finished)
+                        
                         if step_type == "sbc":
+                            sbc_name = step_cfg.get("sbc_name")
+                            set_current_step_info(f"Làm SBC '{sbc_name}' (Bước {step_num})")
+                            
                             # Nếu bước SBC này đã hoàn thành ở vòng lặp trước, bỏ qua
                             if steps_finished.get(idx, False):
-                                print(f"\n[WORKFLOW] Bước {step_num} (SBC: {step_cfg.get('sbc_name')}) đã hoàn thành ở vòng trước. Bỏ qua.")
+                                print(f"\n[WORKFLOW] Bước {step_num} (SBC: {sbc_name}) đã hoàn thành ở vòng trước. Bỏ qua.")
+                                step_idx += 1
                                 continue
                                 
-                            sbc_name = step_cfg.get("sbc_name")
                             max_repeats = step_cfg.get("max_repeats", -1)
                             supply_pack_name = step_cfg.get("supply_pack_name")
                             save_count_key = step_cfg.get("save_count_key")
@@ -254,6 +288,7 @@ def run():
                                     steps_finished[idx] = True
                                     daily_state["steps_finished"] = steps_finished
                                     save_daily_state(daily_state)
+                                    step_idx += 1
                                     continue
                                 print(f"[WORKFLOW] SBC '{sbc_name}' trong ngày đã làm {done_today} lần. Lượt này cần làm thêm {max_repeats_adjusted} lần (Mục tiêu: {max_repeats}).")
                                 max_repeats_run = max_repeats_adjusted
@@ -281,22 +316,28 @@ def run():
                                 success_count, completed_sbcs_total_run, is_finished = execute_sbc_step(
                                     page, config, paletools_js, sbc_name, max_repeats_run, completed_sbcs_total, supply_pack_name=supply_pack_name, on_success_cb=on_sbc_success_cb
                                 )
+                                steps_finished = daily_state.get("steps_finished", steps_finished)
                                 steps_finished[idx] = is_finished
                             except SkipStepException:
                                 print(f"[INFO] Bỏ qua bước {step_num} (SBC: {sbc_name}) theo yêu cầu của người dùng.")
+                                steps_finished = daily_state.get("steps_finished", steps_finished)
                                 steps_finished[idx] = True
                             
                             # Cập nhật và lưu lại trạng thái hoàn thành
                             daily_state["steps_finished"] = steps_finished
                             save_daily_state(daily_state)
+                            step_idx += 1
                                 
                         elif step_type == "open_pack":
+                            pack_name = step_cfg.get("pack_name")
+                            set_current_step_info(f"Open pack '{pack_name}' (Bước {step_num})")
+                            
                             # Nếu bước mở pack này đã hoàn thành ở vòng lặp trước, bỏ qua
                             if steps_finished.get(idx, False):
-                                print(f"\n[WORKFLOW] Bước {step_num} (OPEN_PACK: {step_cfg.get('pack_name')}) đã hoàn thành ở vòng trước. Bỏ qua.")
+                                print(f"\n[WORKFLOW] Bước {step_num} (OPEN_PACK: {pack_name}) đã hoàn thành ở vòng trước. Bỏ qua.")
+                                step_idx += 1
                                 continue
 
-                            pack_name = step_cfg.get("pack_name")
                             open_all = step_cfg.get("open_all", False)
                             count_key = step_cfg.get("count_key")
                             
@@ -315,6 +356,7 @@ def run():
                                         steps_finished[idx] = True
                                         daily_state["steps_finished"] = steps_finished
                                         save_daily_state(daily_state)
+                                    step_idx += 1
                                     continue
                                 print(f"\n[WORKFLOW] --- THỰC HIỆN BƯỚC {step_num} (OPEN_PACK: {pack_name}) ---")
                                 print(f"[WORKFLOW] Lấy số lượng mở pack từ biến '{count_key}': {open_count} lần")
@@ -341,6 +383,7 @@ def run():
                                     page, config, paletools_js, pack_name, open_count=open_count, open_all=open_all, on_success_cb=on_pack_success_cb
                                 )
                                 
+                                steps_finished = daily_state.get("steps_finished", steps_finished)
                                 # Đánh dấu bước là hoàn thành nếu hàm execute_open_pack_step báo đã xong (hoặc đã mở hết pack)
                                 if is_finished:
                                     if count_key:
@@ -357,14 +400,17 @@ def run():
                                         steps_finished[idx] = True
                             except SkipStepException:
                                 print(f"[INFO] Bỏ qua bước {step_num} (OPEN_PACK: {pack_name}) theo yêu cầu của người dùng.")
+                                steps_finished = daily_state.get("steps_finished", steps_finished)
                                 steps_finished[idx] = True
                                     
                             # Cập nhật và lưu lại trạng thái hoàn thành
                             daily_state["steps_finished"] = steps_finished
                             save_daily_state(daily_state)
+                            step_idx += 1
                                     
                         else:
                             print(f"[WARNING] Loại bước '{step_type}' không được hỗ trợ. Bỏ qua.")
+                            step_idx += 1
                             
                     if session_lost:
                         break

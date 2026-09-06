@@ -8,6 +8,9 @@ BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 PALETOOLS_PATH = os.path.join(BASE_DIR, "resources", "paletools.txt")
 
 GLOBAL_CONFIG = None
+_current_step_info = ""
+_active_workflow = []
+_current_step_index = 0
 
 def get_config():
     global GLOBAL_CONFIG
@@ -24,6 +27,67 @@ def get_config():
 def set_config(cfg):
     global GLOBAL_CONFIG
     GLOBAL_CONFIG = cfg
+
+def set_current_step_info(info_str):
+    global _current_step_info
+    _current_step_info = info_str or ""
+
+def get_current_step_info():
+    global _current_step_info
+    return _current_step_info
+
+def set_active_workflow(wf, current_idx=0):
+    global _active_workflow, _current_step_index
+    _active_workflow = wf
+    _current_step_index = current_idx
+
+def get_active_workflow():
+    global _active_workflow
+    return _active_workflow
+
+def set_current_step_index(idx):
+    global _current_step_index
+    _current_step_index = idx
+
+def get_current_step_index():
+    global _current_step_index
+    return _current_step_index
+
+def add_steps_to_active_workflow(new_step_configs, daily_state=None):
+    """
+    Chèn các bước mới vào ngay sau bước hiện tại trong workflow đang chạy.
+    Đồng thời cập nhật lại chỉ mục cho steps_finished nếu được truyền vào hoặc lưu trong state.json.
+    """
+    global _active_workflow, _current_step_index
+    if not isinstance(_active_workflow, list):
+        _active_workflow = []
+    
+    insert_pos = min(len(_active_workflow), _current_step_index + 1)
+    k = len(new_step_configs)
+    
+    for i, step_cfg in enumerate(new_step_configs):
+        _active_workflow.insert(insert_pos + i, step_cfg)
+        
+    # Cập nhật lại steps_finished trong state để không bị lệch chỉ mục bước
+    from src.state import load_daily_state, save_daily_state
+    if daily_state is None:
+        daily_state = load_daily_state()
+        
+    if daily_state is not None and "steps_finished" in daily_state:
+        old_finished = daily_state.get("steps_finished", {})
+        int_finished = {int(idx): val for idx, val in old_finished.items() if str(idx).isdigit()}
+        new_finished = {}
+        for old_idx, val in sorted(int_finished.items()):
+            if old_idx < insert_pos:
+                new_finished[old_idx] = val
+            else:
+                new_finished[old_idx + k] = val
+        for i in range(k):
+            new_finished[insert_pos + i] = False
+        daily_state["steps_finished"] = new_finished
+        save_daily_state(daily_state)
+        
+    return _active_workflow
 
 class DualLogger(object):
     def __init__(self, filepath):

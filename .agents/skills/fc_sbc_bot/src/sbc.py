@@ -183,8 +183,11 @@ def get_sbc_repeats(tile_locator):
     return None
 
 def execute_sbc_step(page, config, paletools_js, sbc_name, max_repeats, completed_sbcs_total, supply_pack_name=None, on_success_cb=None):
+    from src.config import set_current_step_info
     delays = config.get("delays", {})
     original_sbc_name = sbc_name
+    step_desc = f"Làm SBC '{sbc_name}'"
+    set_current_step_info(step_desc)
     print(f"\n[SBC] Bắt đầu tác vụ SBC: {sbc_name} (Lặp tối đa: {max_repeats if max_repeats != 999999 else 'Không giới hạn'})")
     
     sbc_count = 0
@@ -193,7 +196,7 @@ def execute_sbc_step(page, config, paletools_js, sbc_name, max_repeats, complete
     consecutive_supplies = 0
     
     # Kiểm tra và dọn dẹp unassigned items trước khi bắt đầu các lượt SBC
-    check_unassigned_badge_and_clear(page, config)
+    check_unassigned_badge_and_clear(page, config, current_step_info=step_desc)
     
     while sbc_count < max_repeats:
         check_pause(page)

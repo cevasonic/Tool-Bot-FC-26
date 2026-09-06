@@ -59,7 +59,8 @@ def navigate_to_unassigned_screen(page):
     # Chờ màn hình unassigned hiển thị
     return wait_for_unassigned_screen(page, timeout_ms=8000)
 
-def check_unassigned_badge_and_clear(page, config):
+def check_unassigned_badge_and_clear(page, config, current_step_info=None):
+    from src.exceptions import SkipStepException
     try:
         # Selector badge unassigned ở top bar
         unassigned_selectors = [
@@ -90,11 +91,13 @@ def check_unassigned_badge_and_clear(page, config):
             print(f"[WARNING] Phát hiện có vật phẩm unassigned chưa xử lý trên top bar. Đang di chuyển để dọn dẹp...")
             navigate_to_unassigned_screen(page)
             
-            handle_unassigned_items(page, config)
+            handle_unassigned_items(page, config, current_step_info=current_step_info)
             print("[OK] Đã dọn dẹp xong unassigned. Quay lại menu chính...")
             page.keyboard.press("Escape")
             time.sleep(1.0)
             return True
+    except SkipStepException:
+        raise
     except Exception as e:
         print(f"[WARNING] Lỗi khi kiểm tra unassigned badge: {e}")
     return False
@@ -259,10 +262,18 @@ def _run_unassigned_cleanup_actions(page):
     except Exception as e:
         print(f"[WARNING] Lỗi khi quay lại Store/My Packs: {e}")
 
-def handle_unassigned_items(page, config):
+def handle_unassigned_items(page, config, current_step_info=None):
     # Tránh import vòng tròn bằng local import
+    import os
+    import re
+    import copy
+    import json
+    from src.config import BASE_DIR, get_current_step_info, add_steps_to_active_workflow
     from src.store import is_in_my_packs
     from src.exceptions import SkipStepException
+    
+    if not current_step_info:
+        current_step_info = get_current_step_info()
     
     print("[RPA] Bắt đầu xử lý vật phẩm unassigned sau khi mở pack...")
     
@@ -296,7 +307,8 @@ def handle_unassigned_items(page, config):
     if still_unassigned or has_unassigned_dialog:
         while still_unassigned or has_unassigned_dialog:
             # Kích hoạt tạm dừng bot tự động
-            trigger_bot_pause(page, "Phát hiện vật phẩm chưa phân phối (Unassigned Items) vẫn còn tồn tại. Có thể kho chứa SBC (SBC Storage) đã đầy 100/100.", config)
+            step_desc_str = f" khi đang {current_step_info}" if current_step_info else ""
+            trigger_bot_pause(page, f"Phát hiện vật phẩm chưa phân phối (Unassigned Items) vẫn còn tồn tại{step_desc_str}. Có thể kho chứa SBC (SBC Storage) đã đầy 100/100.", config)
             
             # Tự động click tắt dialog cảnh báo nếu có để màn hình hiển thị sạch sẽ
             if has_unassigned_dialog:
@@ -309,26 +321,31 @@ def handle_unassigned_items(page, config):
                     pass
             
             # Hiển thị menu lựa chọn trên console
-            print("\n" + "="*60)
+            print("\n" + "="*65)
             print("CẢNH BÁO: PHÁT HIỆN VẬT PHẨM CHƯA PHÂN PHỐI (UNASSIGNED ITEMS) VẪN CÒN TỒN TẠI!")
-            print("Vui lòng nhập lựa chọn của bạn trong console (1, 2, hoặc 3):")
+            if current_step_info:
+                print(f"📍 Hiện tại đang: {current_step_info}")
+            print("Vui lòng nhập lựa chọn của bạn trong console hoặc Telegram (1, 2, 3 hoặc 4):")
             print("  [1] Giữ nguyên trạng thái tạm dừng này để tôi tự xử lý thủ công.")
             print("  [2] Thử dọn dẹp lại (tự động di chuyển các thẻ unassigned vào SBC Storage/Club một lần nữa).")
             print("  [3] Bỏ qua bước hiện tại và chuyển sang bước tiếp theo trong workflow.")
-            print("="*60 + "\n")
+            print("  [4] Bổ sung thêm bước vào quy trình hiện tại.")
+            print("="*65 + "\n")
             
             # Gửi menu qua Telegram cho người dùng
+            tg_step_line = f"\n📍 **Hiện tại đang:** {current_step_info}" if current_step_info else ""
             menu_msg = (
-                "CẢNH BÁO: PHÁT HIỆN VẬT PHẨM CHƯA PHÂN PHỐI (UNASSIGNED ITEMS) VẪN CÒN TỒN TẠI!\n"
-                "Vui lòng chọn phản hồi (1, 2, hoặc 3):\n"
+                f"⚠️ **CẢNH BÁO: PHÁT HIỆN VẬT PHẨM CHƯA PHÂN PHỐI (UNASSIGNED ITEMS)!**{tg_step_line}\n\n"
+                "Vui lòng chọn phản hồi (1, 2, 3 hoặc 4):\n"
                 "  [1] Giữ nguyên trạng thái tạm dừng này để tôi tự xử lý thủ công.\n"
                 "  [2] Thử dọn dẹp lại (tự động di chuyển các thẻ unassigned vào SBC Storage/Club một lần nữa).\n"
-                "  [3] Bỏ qua bước hiện tại và chuyển sang bước tiếp theo trong workflow."
+                "  [3] Bỏ qua bước hiện tại và chuyển sang bước tiếp theo trong workflow.\n"
+                "  [4] Bổ sung thêm bước vào quy trình hiện tại."
             )
             send_telegram_message(config, menu_msg)
             
             choice = None
-            print("Đang chờ phản hồi từ console hoặc Telegram (1, 2, hoặc 3)...")
+            print("Đang chờ phản hồi từ console hoặc Telegram (1, 2, 3 hoặc 4)...")
             last_tg_check = 0.0
             
             # Dọn dẹp hàng chờ console input cũ
@@ -341,10 +358,10 @@ def handle_unassigned_items(page, config):
             except Exception:
                 pass
                 
-            while choice not in ["1", "2", "3"]:
+            while choice not in ["1", "2", "3", "4"]:
                 # 1. Kiểm tra Console Input (không chặn)
                 console_in = get_console_input(timeout=0.1)
-                if console_in in ["1", "2", "3"]:
+                if console_in in ["1", "2", "3", "4"]:
                     choice = console_in
                     print(f"[INFO] Đã nhận được lựa chọn từ console: {choice}")
                     break
@@ -355,7 +372,7 @@ def handle_unassigned_items(page, config):
                     tg_choices = process_telegram_updates(config)
                     if tg_choices:
                         for tc in tg_choices:
-                            if tc in ["1", "2", "3"]:
+                            if tc in ["1", "2", "3", "4"]:
                                 choice = tc
                                 print(f"[INFO] Đã nhận được lựa chọn từ Telegram: {choice}")
                                 send_telegram_message(config, f"Đã nhận phản hồi lựa chọn [{choice}]. Đang thực hiện...")
@@ -382,6 +399,115 @@ def handle_unassigned_items(page, config):
             elif choice == "3":
                 print("[INFO] Đã chọn 3: Bỏ qua bước hiện tại.")
                 resume_bot_status(page)
+                raise SkipStepException()
+                
+            elif choice == "4":
+                print("[INFO] Đã chọn 4: Bổ sung thêm bước vào quy trình hiện tại...")
+                # 1. Đọc danh sách toàn bộ các bước master từ config_all.json (hoặc config.json làm fallback)
+                master_workflow = []
+                config_all_path = os.path.join(BASE_DIR, "config_all.json")
+                if os.path.exists(config_all_path):
+                    try:
+                        with open(config_all_path, "r", encoding="utf-8") as caf:
+                            config_all_data = json.load(caf)
+                            master_workflow = config_all_data.get("workflow", [])
+                    except Exception as e:
+                        print(f"[WARNING] Không thể đọc config_all.json: {e}. Fallback về config.json.")
+                
+                if not master_workflow:
+                    master_workflow = config.get("workflow", [])
+                    
+                # 2. Xây dựng tin nhắn danh sách các bước khả dụng
+                steps_list_str = ""
+                step_map = {}
+                for step_cfg in master_workflow:
+                    s_num = step_cfg.get("step")
+                    s_type = step_cfg.get("type", "").upper()
+                    if s_type == "SBC":
+                        s_name = f"SBC: {step_cfg.get('sbc_name')}"
+                    elif s_type == "OPEN_PACK":
+                        s_name = f"Pack: {step_cfg.get('pack_name')}"
+                    else:
+                        s_name = f"Unknown: {s_type}"
+                    steps_list_str += f"- `{s_num}`: {s_name}\n"
+                    step_map[s_num] = step_cfg
+                    
+                prompt_append_msg = (
+                    "📋 **BỔ SUNG BƯỚC VÀO QUY TRÌNH HIỆN TẠI**\n\n"
+                    "**Danh sách tất cả các bước khả dụng:**\n"
+                    f"{steps_list_str}\n"
+                    "👉 Vui lòng gửi lại chuỗi số thứ tự các bước muốn bổ sung, cách nhau bởi dấu phẩy (Ví dụ: `15, 16` hoặc `9, 10`).\n"
+                    "Các bước mới sẽ được chèn vào ngay sau bước hiện tại để bot thực hiện tiếp."
+                )
+                print(f"\n[WORKFLOW APPEND] {prompt_append_msg}")
+                send_telegram_message(config, prompt_append_msg)
+                
+                # Dọn dẹp hàng chờ input cũ
+                try:
+                    import queue
+                    from src.notification import _console_queue
+                    if _console_queue:
+                        while not _console_queue.empty():
+                            _console_queue.get_nowait()
+                except Exception:
+                    pass
+                
+                added_steps = []
+                last_append_log = 0.0
+                
+                while not added_steps:
+                    # Kiểm tra console input
+                    c_in = get_console_input(timeout=0.1)
+                    if c_in:
+                        nums = [int(s) for s in re.findall(r'\d+', c_in)]
+                        if nums and all(n in step_map for n in nums):
+                            added_steps = [copy.deepcopy(step_map[n]) for n in nums]
+                            print(f"[OK] Đã nhận danh sách bước bổ sung từ console: {[n for n in nums]}")
+                            break
+                        else:
+                            print(f"[WARNING] Danh sách bước không hợp lệ: '{c_in}'. Vui lòng nhập lại các số có trong danh sách.")
+                            
+                    # Kiểm tra telegram updates định kỳ
+                    curr_t = time.time()
+                    if curr_t - last_append_log >= 1.5:
+                        tg_in_list = process_telegram_updates(config)
+                        for t_in in tg_in_list:
+                            nums = [int(s) for s in re.findall(r'\d+', t_in)]
+                            if nums:
+                                valid = True
+                                invalid_n = None
+                                for n in nums:
+                                    if n not in step_map:
+                                        valid = False
+                                        invalid_n = n
+                                        break
+                                if valid:
+                                    added_steps = [copy.deepcopy(step_map[n]) for n in nums]
+                                    print(f"[OK] Đã nhận danh sách bước bổ sung từ Telegram: {[n for n in nums]}")
+                                    break
+                                else:
+                                    err_msg = f"⚠️ Số bước `{invalid_n}` không hợp lệ hoặc không có trong danh sách khả dụng. Vui lòng thử lại!"
+                                    print(f"[WARNING] {err_msg}")
+                                    send_telegram_message(config, err_msg)
+                        last_append_log = curr_t
+                        
+                    time.sleep(0.1)
+                    
+                # Chèn các bước mới vào workflow đang chạy
+                updated_workflow = add_steps_to_active_workflow(added_steps)
+                selected_steps_str = " -> ".join([str(s.get("step")) for s in updated_workflow])
+                added_nums_str = ", ".join([str(s.get("step")) for s in added_steps])
+                confirm_msg = (
+                    f"✅ Đã bổ sung thành công các bước [{added_nums_str}] vào quy trình!\n"
+                    f"📋 Chuỗi quy trình mới: [{selected_steps_str}].\n"
+                    "🚀 Bot đang chuyển sang thực hiện bước tiếp theo ngay bây giờ..."
+                )
+                print(f"[WORKFLOW APPEND] {confirm_msg}")
+                send_telegram_message(config, confirm_msg)
+                
+                # Reset trạng thái bot về running
+                resume_bot_status(page)
+                # Bỏ qua bước hiện tại để tiến sang bước vừa được bổ sung
                 raise SkipStepException()
                 
             # Đánh giá lại điều kiện để tiếp tục vòng lặp if unassigned vẫn còn

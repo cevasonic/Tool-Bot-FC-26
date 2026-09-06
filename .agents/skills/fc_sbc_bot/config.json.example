@@ -14,19 +14,19 @@
     }
   },
   "delays": {
-    "before_build_min": 1.5,
-    "before_build_max": 3.0,
-    "after_build_min": 2.5,
-    "after_build_max": 4.5,
-    "after_submit_min": 1.5,
-    "after_submit_max": 3.0,
-    "batch_size": 10,
-    "batch_rest_seconds": 60
+    "before_build_min": 2.0,
+    "before_build_max": 5.0,
+    "after_build_min": 3.0,
+    "after_build_max": 5.0,
+    "after_submit_min": 2.0,
+    "after_submit_max": 5.0,
+    "batch_size": 5,
+    "batch_rest_seconds": 30
   },
   "telegram": {
-    "enabled": false,
-    "bot_token": "YOUR_TELEGRAM_BOT_TOKEN",
-    "chat_id": "YOUR_TELEGRAM_CHAT_ID"
+    "enabled": true,
+    "bot_token": "8798044542:AAGRnwPmtqvUb6LaUexQHgA3UijfdFyc5YQ",
+    "chat_id": "703003678"
   },
   "workflow": [
     {

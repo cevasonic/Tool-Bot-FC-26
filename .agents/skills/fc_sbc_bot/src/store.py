@@ -259,7 +259,10 @@ def open_single_supply_pack(page, config, paletools_js, pack_name):
                 sleep_human_like(1.5, 2.5, page)
                 
                 # Tự động xử lý vật phẩm unassigned sau khi mở pack
-                handle_unassigned_items(page, config)
+                step_desc = f"Open pack tiếp tế '{resolved_pack_name}'"
+                from src.config import set_current_step_info
+                set_current_step_info(step_desc)
+                handle_unassigned_items(page, config, current_step_info=step_desc)
                 # Đợi giao diện quay lại Store
                 sleep_human_like(0.5, 1.2, page)
                 wait_for_click_shield(page)
@@ -270,6 +273,8 @@ def open_single_supply_pack(page, config, paletools_js, pack_name):
         else:
             print(f"[INFO] Không tìm thấy phần tử pack '{resolved_pack_name}' trên giao diện.")
             return False
+    except SkipStepException:
+        raise
     except Exception as e:
         print(f"[ERROR] Lỗi khi mở pack tiếp tế {resolved_pack_name}: {e}")
         return False
@@ -378,7 +383,10 @@ def execute_open_pack_step(page, config, paletools_js, pack_name, open_count=Non
                     sleep_human_like(1.5, 2.5, page)
                     
                     # Tự động xử lý vật phẩm unassigned (gửi vào Club/SBC Storage) sau khi mở pack
-                    handle_unassigned_items(page, config)
+                    step_desc = f"Open pack '{resolved_pack_name}'"
+                    from src.config import set_current_step_info
+                    set_current_step_info(step_desc)
+                    handle_unassigned_items(page, config, current_step_info=step_desc)
                     # Đợi giao diện quay lại Store
                     sleep_human_like(0.5, 1.2, page)
                     wait_for_click_shield(page)
@@ -396,6 +404,8 @@ def execute_open_pack_step(page, config, paletools_js, pack_name, open_count=Non
                 print(f"[INFO] Không tìm thấy phần tử pack '{resolved_pack_name}' trên giao diện.")
                 is_finished = False
                 break
+        except SkipStepException:
+            raise
         except Exception as e:
             print(f"[ERROR] Lỗi khi mở pack {resolved_pack_name}: {e}")
             alert_user_error(page, config, f"Lỗi khi mở pack {resolved_pack_name}")
