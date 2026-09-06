@@ -2,6 +2,7 @@ import time
 from src.utils import sleep_human_like, wait_for_click_shield, dismiss_modals
 from src.paletools import ensure_paletools_injected, check_pause
 from src.notification import alert_user_error
+from src.exceptions import SkipStepException
 
 def get_pack_info(tile):
     pack_name = None

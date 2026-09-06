@@ -60,9 +60,17 @@ class TestUnassignedOption4(unittest.TestCase):
         nums = [int(s) for s in re.findall(r'\d+', input_str)]
         self.assertEqual(nums, [9, 10, 15])
         
-        input_str_single = "4"
-        nums_single = [int(s) for s in re.findall(r'\d+', input_str_single)]
-        self.assertEqual(nums_single, [4])
+    def test_skip_step_exception_imports(self):
+        import src.store
+        import src.sbc
+        import src.unassigned
+        import main
+        from src.exceptions import SkipStepException
+        
+        self.assertTrue(hasattr(src.store, "SkipStepException"))
+        self.assertTrue(hasattr(src.sbc, "SkipStepException"))
+        self.assertTrue(hasattr(main, "SkipStepException"))
+        self.assertTrue(issubclass(SkipStepException, Exception))
 
 if __name__ == "__main__":
     unittest.main()

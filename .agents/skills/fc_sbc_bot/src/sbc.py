@@ -8,6 +8,7 @@ from src.paletools import check_pause, ensure_paletools_injected, ensure_bot_ove
 from src.notification import alert_user_error
 from src.unassigned import check_unassigned_badge_and_clear
 from src.store import open_single_supply_pack
+from src.exceptions import SkipStepException
 
 def check_concept_players_in_squad(page):
     try:
