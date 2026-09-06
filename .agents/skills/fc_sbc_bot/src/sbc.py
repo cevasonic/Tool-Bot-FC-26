@@ -223,7 +223,7 @@ def execute_sbc_step(page, config, paletools_js, sbc_name, max_repeats, complete
                 page.click(".ut-tab-bar-item.icon-sbc", timeout=5000)
             except Exception:
                 page.click(".ut-tab-bar-item.icon-sbc", force=True)
-            sleep_human_like(1.5, 2.5, page)
+            sleep_human_like(0.8, 1.5, page)
         except Exception as e:
             print(f"[ERROR] Không thể di chuyển tới menu SBC: {e}")
             alert_user_error(page, config, "Lỗi di chuyển tới menu SBC")
@@ -251,7 +251,7 @@ def execute_sbc_step(page, config, paletools_js, sbc_name, max_repeats, complete
             if all_tab_btn.count() > 0:
                 print("[INFO] Click tab 'All' để tìm kiếm diện rộng...")
                 all_tab_btn.click()
-                sleep_human_like(1.5, 2.5, page)
+                sleep_human_like(0.8, 1.5, page)
                 
                 # Cuộn xuống để tải thêm các SBC (lazy loading)
                 print("[INFO] Đang cuộn xuống để tải thêm các SBC...")
@@ -263,7 +263,7 @@ def execute_sbc_step(page, config, paletools_js, sbc_name, max_repeats, complete
                             c.scrollTop = c.scrollHeight;
                         });
                     """)
-                    sleep_human_like(0.6, 1.0, page)
+                    sleep_human_like(0.3, 0.6, page)
         except Exception as tab_err:
             print(f"[WARNING] Không thể bấm tab 'All' hoặc cuộn trang: {tab_err}")
         
@@ -282,7 +282,7 @@ def execute_sbc_step(page, config, paletools_js, sbc_name, max_repeats, complete
                 page.keyboard.press("Backspace")
                 # Nhập tên SBC
                 search_input.type(original_sbc_name)
-                sleep_human_like(2.0, 3.5, page)
+                sleep_human_like(0.8, 1.5, page)
         except Exception as search_err:
             print(f"[WARNING] Lỗi khi sử dụng ô tìm kiếm: {search_err}")
             
@@ -385,7 +385,7 @@ def execute_sbc_step(page, config, paletools_js, sbc_name, max_repeats, complete
             dismiss_modals(page)
             
             # Chờ một chút để Web App hoàn tất việc bind các event listener sau khi render tile
-            sleep_human_like(1.5, 2.5, page)
+            sleep_human_like(0.6, 1.2, page)
             
             # Danh sách các phương thức và tọa độ click thử nghiệm để đảm bảo click mở được SBC thành công
             click_attempts = [
@@ -435,7 +435,7 @@ def execute_sbc_step(page, config, paletools_js, sbc_name, max_repeats, complete
                         pass
                 
                 # Chờ Web App phản hồi và tải giao diện Builder (tăng thời gian chờ)
-                sleep_human_like(2.0, 3.5, page)
+                sleep_human_like(1.2, 2.0, page)
                 
                 # Kiểm tra xem đã vào Builder chưa
                 search_visible = False
@@ -580,18 +580,18 @@ def execute_sbc_step(page, config, paletools_js, sbc_name, max_repeats, complete
         page.focus("body")
         page.click("body", delay=100)
         
-        sleep_human_like(delays.get("before_build_min", 1.5), delays.get("before_build_max", 3.0), page)
+        sleep_human_like(delays.get("before_build_min", 1.0), delays.get("before_build_max", 1.8), page)
         
         print("[RPA] Nhấn phím 'T' để tự động điền template...")
         page.keyboard.press("t")
         
-        sleep_human_like(delays.get("after_build_min", 2.5), delays.get("after_build_max", 4.5), page)
+        sleep_human_like(delays.get("after_build_min", 1.2), delays.get("after_build_max", 2.0), page)
         
         # Kiểm tra xem đội hình có chứa cầu thủ Concept nào không hoặc trống/thiếu thẻ
         # (Ở đây ta cứ bấm 'T' xong là bấm 'S' thử submit trước. Nếu kẹt mới kiểm tra nguyên nhân)
         print("[RPA] Nhấn phím 'S' để thực hiện Submit...")
         page.keyboard.press("s")
-        sleep_human_like(2.0, 3.0, page)
+        sleep_human_like(1.2, 2.0, page)
         
         # 1. Xử lý các hộp thoại xác nhận submit nếu xuất hiện (Submit Anyway, Confirm, v.v.)
         confirm_selectors = [
@@ -611,7 +611,7 @@ def execute_sbc_step(page, config, paletools_js, sbc_name, max_repeats, complete
                 if c_btn.count() > 0 and c_btn.is_visible():
                     print(f"[RPA] Phát hiện hộp thoại xác nhận submit: '{c_btn.text_content().strip()}'. Đang click...")
                     c_btn.click()
-                    sleep_human_like(1.5, 2.5, page)
+                    sleep_human_like(0.8, 1.5, page)
                     break
             except Exception:
                 pass
@@ -626,7 +626,7 @@ def execute_sbc_step(page, config, paletools_js, sbc_name, max_repeats, complete
                 print(f"[RPA] Đang bấm Claim Rewards cho lượt {sbc_count + 1}...")
                 claim_btn.click()
                 submit_verified = True
-                sleep_human_like(2.0, 3.0, page)
+                sleep_human_like(1.2, 2.0, page)
         except Exception:
             pass
             
@@ -776,12 +776,12 @@ def execute_sbc_step(page, config, paletools_js, sbc_name, max_repeats, complete
                 print(f"[WARNING] Lỗi khi gọi callback lưu trạng thái SBC: {cb_err}")
             
         if sbc_count < max_repeats:
-            sleep_human_like(delays.get("after_submit_min", 1.5), delays.get("after_submit_max", 3.0), page)
+            sleep_human_like(delays.get("after_submit_min", 1.0), delays.get("after_submit_max", 2.0), page)
         else:
             time.sleep(0.3)
             
         if completed_sbcs_total % delays.get("batch_size", 10) == 0 and sbc_count < max_repeats:
-            rest_time = delays.get("batch_rest_seconds", 60)
+            rest_time = delays.get("batch_rest_seconds", 15)
             print(f"[INFO] Tạm nghỉ để tránh bị ban tài khoản: {rest_time}s...")
             time.sleep(rest_time)
             
@@ -797,9 +797,9 @@ def execute_sbc_step(page, config, paletools_js, sbc_name, max_repeats, complete
         if claim_btn.count() > 0 and claim_btn.is_visible():
             print("[RPA] Đang click Claim Rewards...")
             claim_btn.click()
-            sleep_human_like(2.0, 3.0, page)
+            sleep_human_like(1.2, 2.0, page)
             page.keyboard.press("Escape")
-            sleep_human_like(0.5, 1.0, page)
+            sleep_human_like(0.4, 0.8, page)
     except Exception:
         pass
         

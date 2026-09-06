@@ -14,14 +14,14 @@
     }
   },
   "delays": {
-    "before_build_min": 2.0,
-    "before_build_max": 5.0,
-    "after_build_min": 3.0,
-    "after_build_max": 5.0,
-    "after_submit_min": 2.0,
-    "after_submit_max": 5.0,
-    "batch_size": 5,
-    "batch_rest_seconds": 30
+    "before_build_min": 1.0,
+    "before_build_max": 1.8,
+    "after_build_min": 1.2,
+    "after_build_max": 2.0,
+    "after_submit_min": 1.0,
+    "after_submit_max": 2.0,
+    "batch_size": 10,
+    "batch_rest_seconds": 15
   },
   "telegram": {
     "enabled": true,

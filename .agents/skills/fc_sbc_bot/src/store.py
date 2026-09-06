@@ -251,13 +251,13 @@ def open_single_supply_pack(page, config, paletools_js, pack_name):
             print(f"[OK] Đang mở 1 pack tiếp tế: {resolved_pack_name}")
             dismiss_modals(page)
             locator.click()
-            sleep_human_like(1.0, 1.8, page)
+            sleep_human_like(0.6, 1.2, page)
             
             tile_parent = locator.locator("xpath=./ancestor::*[contains(@class, 'tile') or contains(@class, 'Tile') or contains(@class, 'pack')]").first
             open_btn = tile_parent.locator("button").first if tile_parent.count() > 0 else locator.locator("button").first
             if open_btn.count() > 0:
                 open_btn.click()
-                sleep_human_like(1.5, 2.5, page)
+                sleep_human_like(0.8, 1.5, page)
                 
                 # Tự động xử lý vật phẩm unassigned sau khi mở pack
                 step_desc = f"Open pack tiếp tế '{resolved_pack_name}'"
@@ -265,7 +265,7 @@ def open_single_supply_pack(page, config, paletools_js, pack_name):
                 set_current_step_info(step_desc)
                 handle_unassigned_items(page, config, current_step_info=step_desc)
                 # Đợi giao diện quay lại Store
-                sleep_human_like(0.5, 1.2, page)
+                sleep_human_like(0.3, 0.8, page)
                 wait_for_click_shield(page)
                 return True
             else:
@@ -375,13 +375,13 @@ def execute_open_pack_step(page, config, paletools_js, pack_name, open_count=Non
                 print(f"[OK] Đang mở pack: {resolved_pack_name} (Lượt {opened_so_far + 1})")
                 dismiss_modals(page)
                 locator.click()
-                sleep_human_like(1.0, 1.8, page)
+                sleep_human_like(0.6, 1.2, page)
                 
                 tile_parent = locator.locator("xpath=./ancestor::*[contains(@class, 'tile') or contains(@class, 'Tile') or contains(@class, 'pack')]").first
                 open_btn = tile_parent.locator("button").first if tile_parent.count() > 0 else locator.locator("button").first
                 if open_btn.count() > 0:
                     open_btn.click()
-                    sleep_human_like(1.5, 2.5, page)
+                    sleep_human_like(0.8, 1.5, page)
                     
                     # Tự động xử lý vật phẩm unassigned (gửi vào Club/SBC Storage) sau khi mở pack
                     step_desc = f"Open pack '{resolved_pack_name}'"
@@ -389,7 +389,7 @@ def execute_open_pack_step(page, config, paletools_js, pack_name, open_count=Non
                     set_current_step_info(step_desc)
                     handle_unassigned_items(page, config, current_step_info=step_desc)
                     # Đợi giao diện quay lại Store
-                    sleep_human_like(0.5, 1.2, page)
+                    sleep_human_like(0.3, 0.8, page)
                     wait_for_click_shield(page)
                     opened_so_far += 1
                     if on_success_cb:

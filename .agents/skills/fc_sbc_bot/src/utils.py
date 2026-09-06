@@ -54,7 +54,7 @@ def wait_for_click_shield(page, timeout=20000):
                 pass
     except Exception:
         pass
-    time.sleep(1.0)
+    time.sleep(0.3)
 
 def dismiss_modals(page):
     """Tự động kiểm tra và đóng/ẩn các modal hoặc pop-up (PaleTools modal, EA modal, v.v.) đang che màn hình."""

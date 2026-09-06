@@ -2,6 +2,13 @@
   "date": "2026-09-06",
   "steps_finished": {
     "0": false,
-    "1": false
-  }
+    "1": false,
+    "2": false
+  },
+  "completed_sbcs": {
+    "5x 80+ Upgrade": 5,
+    "Provisions Upgrade": 7,
+    "1 of 5 84+ Player Pick": 31
+  },
+  "context_vars": {}
 }
