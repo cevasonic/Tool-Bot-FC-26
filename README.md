@@ -59,6 +59,13 @@ python .agents/skills/fc_sbc_bot/main.py
 4. Bot sẽ tự động nhúng PaleTools, thực hiện giải các SBC bạn đã cấu hình và tự động mở pack.
 
 
-## Câu lệnh chạy bot
+## Câu lệnh chạy Bot SBC
 1. Trên MACOS:
 cd "/Users/binhnguyenthanh/Documents/FC Ultimate/.agents/skills/fc_sbc_bot" && python3 main.py
+
+
+
+## Câu lệnh chạy Bot Solve
+1. Trên MACOS:
+cd "/Users/binhnguyenthanh/Documents/FC Ultimate/.agents/skills/fc_sbc_solve" && python3 main.py
+
